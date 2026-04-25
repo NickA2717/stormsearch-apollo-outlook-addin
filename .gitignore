@@ -1,0 +1,18 @@
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Local env / secrets — should never be in repo
+.env
+.env.local
+*.key
+*api_key*
+
+# Node (in case we add tooling later)
+node_modules/
+package-lock.json

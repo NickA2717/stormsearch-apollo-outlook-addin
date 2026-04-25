@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Push to Apollo Sequence</title>
+  <link rel="stylesheet" href="taskpane.css">
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+</head>
+<body>
+
+  <h1>Push to Apollo</h1>
+  <div class="subtitle">Send your reply through an Apollo sequence so follow-ups continue automatically.</div>
+
+  <!-- Settings panel: API key entry. Shown if no key stored, or via Settings link -->
+  <div id="settings-panel" class="section hidden">
+    <h2>Settings</h2>
+    <label for="api-key-input">Apollo API key</label>
+    <input type="password" id="api-key-input" placeholder="Paste your Apollo API key">
+    <div style="font-size: 11px; color: #666; margin-top: 4px;">Stored only on your Mac. Never sent anywhere except Apollo.</div>
+    <div class="row" style="margin-top: 10px;">
+      <button class="btn-primary" id="save-key-btn">Save</button>
+      <button class="btn-secondary" id="cancel-settings-btn">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Main panel -->
+  <div id="main-panel" class="hidden">
+
+    <div id="status-area"></div>
+
+    <div class="section">
+      <h2>Contact</h2>
+      <div id="contact-loading" class="status info"><span class="spinner"></span>Looking up contact in Apollo…</div>
+      <div id="contact-result" class="hidden"></div>
+      <div id="contact-not-found" class="section hidden" style="margin-top: 8px;">
+        <div class="status warn">No matching contact found in Apollo.</div>
+        <button class="btn-primary" id="create-contact-btn">Create new contact</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Send from</h2>
+      <select id="mailbox-select"><option>Loading mailboxes…</option></select>
+    </div>
+
+    <div class="section">
+      <h2>Sequence</h2>
+      <select id="sequence-select"><option>Loading active sequences…</option></select>
+    </div>
+
+    <button id="push-btn" class="btn-primary full-button" disabled>Push to Apollo Sequence</button>
+
+    <div id="result-area" style="margin-top: 12px;"></div>
+
+    <footer>
+      <button class="btn-link" id="open-settings-btn">Settings</button>
+      &nbsp;·&nbsp;
+      <a href="https://github.com/NickA2717/stormsearch-apollo-outlook-addin" target="_blank">Help</a>
+    </footer>
+
+  </div>
+
+  <script src="thread-formatter.js"></script>
+  <script src="apollo.js"></script>
+  <script src="taskpane.js"></script>
+</body>
+</html>
