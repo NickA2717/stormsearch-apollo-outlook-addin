@@ -138,12 +138,21 @@ Nick has many sender mailboxes (~50+ Nick-prefixed alone, across multiple cold-e
 ## Build Phases
 
 - ✅ Phase 0: Project folder created at `/Users/nickmini/*CLAUDE CODE - WORK*/stormsearch-apollo-outlook-addin/`
-- 🔄 Phase 1: GitHub repo + tooling setup (in progress)
-- ⏳ Phase 2: Code (manifest, taskpane, JS logic, Apollo integration)
-- ⏳ Phase 3: Deploy to GitHub Pages
-- ⏳ Phase 4: Nick sideloads in Outlook + enters API key
-- ⏳ Phase 5: End-to-end test on a real reply
-- ⏳ Phase 6: Polish based on Nick's first-week feedback
+- ✅ Phase 1: GitHub repo + tooling setup (gh CLI installed, auth done as NickA2717)
+- ✅ Phase 2: All code written — manifest, taskpane (HTML/CSS/JS), apollo.js, thread-formatter.js
+- ✅ Phase 3: Deployed to GitHub Pages at https://nicka2717.github.io/stormsearch-apollo-outlook-addin/
+- ✅ Phase 4: Sideloaded via M365 admin center as "Push to Apollo Sequence", deployed to Nick (User-only)
+- 🔄 Phase 5: Waiting on Microsoft propagation (5 min – 72 hr per MS, typically 10-30 min)
+- ⏳ Phase 6: End-to-end test on a real reply
+- ⏳ Phase 7: Polish based on Nick's first-week feedback
+
+## Repo & Hosting
+
+- GitHub repo: https://github.com/NickA2717/stormsearch-apollo-outlook-addin (public)
+- GitHub Pages URL: https://nicka2717.github.io/stormsearch-apollo-outlook-addin/
+- Manifest URL: https://nicka2717.github.io/stormsearch-apollo-outlook-addin/manifest.xml
+- M365 admin deployment: "Push to Apollo Sequence" deployed to Nick (Specific user)
+- App ID (from manifest): `a8473972-6583-4df4-b72a-56f556e9f059`
 
 ---
 
