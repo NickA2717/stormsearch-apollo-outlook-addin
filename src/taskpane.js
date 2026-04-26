@@ -366,19 +366,23 @@
 
     try {
       // 1. Add contact to sequence.
-      await apollo.addContactToSequence({
+      console.log("[push] adding contact to sequence", { sequenceId, contactId: selectedContact.id, mailboxId });
+      const addRes = await apollo.addContactToSequence({
         sequenceId,
         contactId: selectedContact.id,
         mailboxId,
       });
+      console.log("[push] add response", addRes);
 
       // 2. Try to push the body into step 1's manual email message via API.
+      console.log("[push] attempting body update; HTML length:", apolloHtml.length);
       const pushResult = await apollo.tryUpdateManualMessageBody({
         contactId: selectedContact.id,
         sequenceId,
         htmlBody: apolloHtml,
         subject: draftContext.subject,
       });
+      console.log("[push] body update result:", pushResult);
 
       if (pushResult.success) {
         setStatus("status-area", "", null);
@@ -386,11 +390,11 @@
           "✓ Pushed to Apollo. Step 1's body is pre-filled — go to Apollo and click Send.",
           "success");
       } else {
-        // Fallback: clipboard.
+        // Fallback: clipboard. Tell the user WHY so we can debug.
         await copyToClipboard(apolloHtml);
         setStatus("status-area", "", null);
         setStatus("result-area",
-          "⚠ Contact added to sequence. The reply HTML was copied to your clipboard — paste it into Apollo's manual email step, then click Send. (API body push not available.)",
+          `⚠ Contact added to sequence, but body push failed (${pushResult.reason}). The HTML is on your clipboard — paste it into Apollo step 1 and click Send.`,
           "warn");
       }
 

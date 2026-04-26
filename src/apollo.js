@@ -143,43 +143,81 @@ class ApolloClient {
 
   /**
    * Best-effort: try to update the body of a queued emailer_message (the manual
-   * email task created when a contact is added to step 1). If the API rejects,
-   * caller should fall back to clipboard copy.
+   * email task created when a contact is added to step 1). If the API rejects
+   * or the verification fetch shows the body didn't actually change, the caller
+   * should fall back to clipboard copy.
    *
-   * We attempt several plausible endpoints since Apollo's public docs are
-   * incomplete in this area.
+   * Apollo's add_contact_ids creates the queued message asynchronously, so we
+   * retry the search a few times if no message is found yet.
    */
   async tryUpdateManualMessageBody({ contactId, sequenceId, htmlBody, subject }) {
-    // Find the queued manual email message for this contact in this sequence.
+    // 1. Find the queued manual email message — retry to dodge race on enrollment.
     let messageId = null;
-    try {
-      const search = await this._request("POST", "/emailer_messages/search", {
-        contact_ids: [contactId],
-        emailer_campaign_ids: [sequenceId],
-        per_page: 25,
-      });
-      const messages = search.emailer_messages || search.messages || [];
-      const queued = messages.find(m =>
-        (m.emailer_step_position === 1 || m.position === 1) &&
-        (m.status === "queued" || m.status === "pending" || m.status === "draft")
-      ) || messages[0];
-      if (queued) messageId = queued.id;
-    } catch (_) {
-      // If search endpoint isn't available, we can't proceed with API push.
-      return { success: false, reason: "search_unavailable" };
+    let queuedMessage = null;
+    for (let attempt = 0; attempt < 4 && !messageId; attempt++) {
+      if (attempt > 0) await new Promise(r => setTimeout(r, 600));
+      try {
+        const search = await this._request("POST", "/emailer_messages/search", {
+          contact_ids: [contactId],
+          emailer_campaign_ids: [sequenceId],
+          per_page: 25,
+        });
+        const messages = search.emailer_messages || search.messages || [];
+        console.log(`[apollo] search attempt ${attempt + 1}: found ${messages.length} message(s)`, messages);
+        // Prefer a manual_email type message at step position 1, queued/pending/draft.
+        const candidate =
+          messages.find(m =>
+            (m.type === "manual_email" || m.emailer_step_type === "manual_email") &&
+            (m.status === "queued" || m.status === "pending" || m.status === "draft" || !m.status)
+          ) ||
+          messages.find(m =>
+            (m.emailer_step_position === 1 || m.position === 1) &&
+            (m.status === "queued" || m.status === "pending" || m.status === "draft" || !m.status)
+          ) ||
+          messages[0];
+        if (candidate) {
+          queuedMessage = candidate;
+          messageId = candidate.id;
+        }
+      } catch (e) {
+        console.warn(`[apollo] search failed on attempt ${attempt + 1}:`, e);
+      }
     }
 
-    if (!messageId) return { success: false, reason: "message_not_found" };
+    if (!messageId) {
+      console.warn("[apollo] no queued emailer_message found after retries");
+      return { success: false, reason: "message_not_found" };
+    }
 
-    // Try PUT to update body.
+    console.log(`[apollo] target message id: ${messageId}, current body length: ${(queuedMessage.body_html || "").length}`);
+
+    // 2. PUT the new body.
     try {
       const body = { body_html: htmlBody };
       if (subject) body.subject = subject;
-      await this._request("PUT", `/emailer_messages/${messageId}`, body);
-      return { success: true, messageId };
+      const putRes = await this._request("PUT", `/emailer_messages/${messageId}`, body);
+      console.log("[apollo] PUT response:", putRes);
     } catch (e) {
+      console.error("[apollo] PUT rejected:", e);
       return { success: false, reason: "put_rejected", error: String(e) };
     }
+
+    // 3. Verify the update actually took effect by re-fetching.
+    try {
+      const verify = await this._request("GET", `/emailer_messages/${messageId}`);
+      const got = verify.emailer_message || verify;
+      const writtenLen = (got.body_html || "").length;
+      const expectedFragment = htmlBody.slice(0, 50);
+      console.log(`[apollo] verify body length: ${writtenLen}; expected starts with: ${expectedFragment.slice(0, 30)}…`);
+      if (!got.body_html || !got.body_html.includes(expectedFragment.slice(0, 20))) {
+        return { success: false, reason: "verify_mismatch", messageId };
+      }
+    } catch (e) {
+      console.warn("[apollo] verify GET failed (treating as success since PUT didn't error):", e);
+      // PUT succeeded; if we can't verify, optimistically claim success.
+    }
+
+    return { success: true, messageId };
   }
 }
 
