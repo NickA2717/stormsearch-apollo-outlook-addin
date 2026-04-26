@@ -69,7 +69,7 @@ class ApolloClient {
   async listMailboxes() {
     const data = await this._request("GET", "/email_accounts");
     return (data.email_accounts || [])
-      .filter(a => a.active !== false)
+      .filter(a => a && a.active !== false && a.email) // skip nulls / inactive / no-email
       .map(a => ({
         id: a.id,
         email: a.email,
@@ -78,7 +78,7 @@ class ApolloClient {
       .sort((a, b) => {
         if (a.default && !b.default) return -1;
         if (!a.default && b.default) return 1;
-        return a.email.localeCompare(b.email);
+        return (a.email || "").localeCompare(b.email || "");
       });
   }
 
