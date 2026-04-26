@@ -148,9 +148,10 @@ Nick has many sender mailboxes (~50+ Nick-prefixed alone, across multiple cold-e
 - ✅ Phase 8: apollo.js routed through proxy; mailboxes/contacts/sequences load
 - ✅ Phase 9: First successful end-to-end push (Todd Shertzer @ Bench Dogs into Claude Test) verified via post-PUT GET
 - ✅ Phase 10: Pushes are reliable; all retries/verification logic in place; console logs available
-- 🔄 Phase 11: Polish HTML output to look as close to a real Outlook thread as possible (DOM-based rewrite of formatter, minimal cleanup)
-- ⏳ Phase 12: Address Outlook draft persistence (close() doesn't always discard on new Outlook for Mac)
-- ⏳ Phase 13: Optional: collapse Storm Search outbound content into Nick's preferred clean Calibri 12pt structure
+- ✅ Phase 11: HTML output cleanup — DOM-based formatter, minimal stripping, inline `margin:0` for tight spacing, image-leftover paragraph removal. Apollo render now matches Outlook closely.
+- 🔄 Phase 12: Final visual polish iterations as Nick reports specific issues
+- ⏳ Phase 13: Address Outlook draft persistence (close() doesn't always discard on new Outlook for Mac — currently using marker-text + best-effort discard)
+- ⏳ Phase 14: Optional future enhancement — split Nick's typed reply from quoted thread, render his portion using clean Storm Search Calibri 12pt template, leave thread untouched
 
 ## CORS Proxy (Cloudflare Worker)
 
@@ -176,21 +177,35 @@ Nick has many sender mailboxes (~50+ Nick-prefixed alone, across multiple cold-e
 - ✅ Search retries on enrollment race (queued message takes a moment to materialize)
 - ✅ Console logging throughout (`[push]` and `[apollo]` prefixes) for debugging
 - ✅ Failure modes surface in the result banner with explicit reason
+- ✅ HTML output looks like a real Outlook thread (tight spacing, authentic fonts, no image gaps)
+
+## HTML Cleanup Strategy — final design
+
+`thread-formatter.js` uses browser-native `DOMParser` to walk the compose body as a tree. Five cleanup passes:
+
+1. **Strip security/non-rendering elements**: `<script>`, `<style>`, `<noscript>`
+2. **Strip images and embedded media**: `<img>`, `<video>`, `<object>`, `<embed>` — per Nick's preference (broken placeholders look worse than absent images). After stripping, run an iterative pass that removes paragraphs/divs left functionally empty (no text, no `<br>`, no named anchor) — this collapses the layout space that image wrappers leave behind, especially in vendor signatures (Bench Dogs logo). NBSP (U+00A0) is treated as content so intentional `<p>&nbsp;</p>` blank lines survive.
+3. **Strip Office namespace tags**: `<o:p>`, `<v:imagedata>`, `<w:WordSection>`, `<m:math>`, `<st1:place>` — these don't render outside Outlook. Text content (rare) is preserved as a text node.
+4. **Strip Outlook ATP banners**: orange-background spans / paragraphs containing only "EXTERNAL" or "[EXTERNAL]" — Defender for Office 365 injects these on incoming external emails. Not part of the conversation.
+5. **Force inline `margin: 0` on all `<p>` and `<div>`**: this is the key visual fix. Outlook's compose engine emits `<p class="MsoNormal">` blocks assuming Outlook's stylesheet (margin: 0) renders them tight. Apollo's TinyMCE editor doesn't ship that CSS so `<p>` picks up browser default ~16px margins, which compound visibly on Outlook's `<p>&nbsp;</p>` blank-line spacers. Inline `margin: 0` neutralizes the default. Elements with explicit margin (e.g., `margin-bottom: 12pt` on the From-block) are skipped — explicit Outlook margins stay intact.
+
+Then wrap the cleaned body in a default Calibri/Tahoma 12pt font block (matches Nick's preferred Storm Search outbound style). Nested children with their own font declarations still render in those fonts (preserving authentic mixed-sender thread appearance).
 
 ## What Needs Work
 
-- 🔧 **HTML cleanup is being rewritten** (Phase 11): Outlook's compose body has heavy markup with mixed fonts, Mso classes, empty paragraphs, safelinks, etc. Earlier regex-based stripping was over-aggressive — it stripped Nick's intended blank lines (empty divs ARE the spacing in Outlook). New approach: use DOMParser, do MINIMAL cleanup. Strip only:
-  - `<script>` / `<style>` / `<noscript>` (security)
-  - `<img>` / `<video>` / `<object>` / `<embed>` (per Nick's image preference)
-  - Outlook ATP "EXTERNAL" orange-banner spans (not part of conversation)
-  - `<o:p>` / `<v:>` / `<w:>` / `<m:>` / `<st1:>` namespaced tags (don't render outside Outlook)
-  - MSO conditional comments
-  KEEP everything else (empty blocks, mso classes, safelinks, mixed fonts) — this is what makes the email look authentically "Outlook".
-- 🔧 **Outlook draft persistence** (Phase 12): `Office.context.mailbox.item.close({ discardItem: true })` doesn't reliably delete the draft on new Outlook for Mac. Improvements added:
+- 🔧 **Outlook draft persistence** (Phase 13): `Office.context.mailbox.item.close({ discardItem: true })` doesn't reliably delete the draft on new Outlook for Mac. Mitigations in place:
   1. Try modern `closeBehavior: CloseBehavior.Discard` first (Mailbox 1.10+)
   2. Fall back to legacy `discardItem: true`
-  3. Before closing, replace body with marker text "[Pushed to Apollo — safe to delete]" so persisted drafts are obviously stale
-  Long-term: may need to switch the manifest to require Mailbox 1.10+ explicitly, or add a "delete draft from server" via Microsoft Graph if persistence persists.
+  3. Before closing, replace body with marker text "[Pushed to Apollo — safe to delete this draft]" so any persisted drafts are obviously stale leftovers, not duplicates of what was pushed
+  Long-term option: bump manifest to require Mailbox 1.10+, or use Microsoft Graph to delete drafts server-side if local close still doesn't work reliably.
+
+## Apollo Editor Quirks (lessons learned)
+
+- **Apollo's editor is TinyMCE-based** (toolbar layout, behavior). Critical implication: `forced_root_block: 'p'` is its default, meaning top-level block `<div>` elements get rewritten to `<p>` on load. We tried converting `<p>` → `<div>` in our formatter — it didn't stick because Apollo undoes it. Inline styles (like `margin: 0`) DO survive the editor round-trip cleanly, so that's the pattern that works.
+- **CORS via Cloudflare proxy is non-negotiable**: Apollo's API only sends `Access-Control-Allow-Origin` for their own Chrome extension and Salesforce. Browser fetches from anywhere else (including our github.io origin and Office iframes) fail at preflight. The Worker proxy at `stormsearch-apollo-proxy.n-alioto7.workers.dev` is permanent infrastructure for this.
+- **Apollo creates emailer_messages asynchronously** after `add_contact_ids`. Search-then-PUT-body must retry to dodge the race. Current retry: up to 4 attempts with 600ms backoff.
+- **Verify body push after PUT**: GET the message back and confirm `body_html` matches what was sent. Catches silent server-side failures (rare but happened once during testing).
+- **Cache-busting matters**: Office Add-in iframes cache aggressively. We append `?v=YYYYMMDDx` query strings to all script/CSS URLs from `taskpane.html`, plus emit `<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">` on the HTML itself. Bump the version letter on every code change.
 
 ## Nick's Preferred Storm Search Outbound HTML Style
 
@@ -217,8 +232,33 @@ Current approach: we wrap the cleaned-up Outlook body in a `<div style="font-fam
 
 ## Test Status
 
-- 2026-04-26: Confirmed Todd Shertzer (Bench Dogs) push to Claude Test sequence with full body landed in Apollo. Verified via console logs (`[apollo] verify body length: 23490`) and Apollo task-panel screenshot. Subsequent visual cleanup still in flight.
-- 2026-04-26: Test contacts removed manually by Nick after testing.
+- 2026-04-26: Confirmed Todd Shertzer (Bench Dogs) push to Claude Test sequence with full body landed in Apollo. Verified via console logs (`[apollo] verify body length: 23490`) and Apollo task-panel screenshot.
+- 2026-04-26: Resolved compounding-margin gap in quoted threads — was caused by Apollo's editor not having Outlook's MsoNormal `margin:0` CSS. Fixed by inlining `margin: 0` on every `<p>`/`<div>` during cleanup.
+- 2026-04-26: Resolved Bench Dogs logo gap in Todd's signature — was caused by image-stripping leaving empty `<p><span></span></p>` wrappers. Fixed by iterative cleanup pass that removes functionally empty paragraphs while preserving NBSP/`<br>`/anchor content.
+- 2026-04-26: Test contacts removed manually by Nick after each test.
+
+## Current Cache-Bust Version
+
+`v=20260426h` — bump the trailing letter on every code change so Office Add-in iframes pick up the new code instead of serving cached versions.
+
+## Quick Re-Test Procedure
+
+Whenever code changes ship:
+1. Wait for GitHub Pages to redeploy (~1-2 min); a background curl-poll confirms the new version is live.
+2. Hard-refresh the Outlook tab (Cmd+Shift+R) — Office iframes cache aggressively even with version params on script URLs.
+3. Open a fresh Reply window in Outlook (existing reply windows hold stale code).
+4. Click Push to Apollo → confirm task pane loads → pick mailbox + sequence → push.
+5. Compare result in Apollo's editor against Outlook's render. Optionally Cmd+A → copy → paste into a chat to inspect raw HTML.
+6. Always remove the test contact from the sequence afterward (manual via Apollo UI, or "remove [name]" to claude).
+
+## Useful Debugging Recipe
+
+If a push misbehaves:
+1. Open Chrome DevTools → Console tab BEFORE clicking Push
+2. Click Push and watch for `[push]` and `[apollo]` log lines
+3. The result banner in the task pane will show the explicit failure reason if anything broke (e.g., `verify_mismatch`, `put_rejected`, `message_not_found`)
+4. The console logs include: HTML length being pushed, the message ID Apollo created, the post-PUT GET verification result
+5. If problem is in the formatter (HTML looks wrong but push succeeded): paste the resulting HTML from Apollo back to Claude — the formatting step is local to the browser, so server logs won't help
 
 ## Repo & Hosting
 
