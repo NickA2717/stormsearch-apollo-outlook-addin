@@ -181,7 +181,7 @@ Nick has many sender mailboxes (~50+ Nick-prefixed alone, across multiple cold-e
 
 ## HTML Cleanup Strategy — final design
 
-`thread-formatter.js` uses browser-native `DOMParser` to walk the compose body as a tree. Six cleanup passes:
+`thread-formatter.js` uses browser-native `DOMParser` to walk the compose body as a tree. Seven cleanup passes:
 
 1. **Strip security/non-rendering elements**: `<script>`, `<style>`, `<noscript>`
 2. **Strip images and embedded media**: `<img>`, `<video>`, `<object>`, `<embed>` — per Nick's preference (broken placeholders look worse than absent images). After stripping, run an iterative pass that removes paragraphs/divs left functionally empty (no text, no `<br>`, no named anchor) — this collapses the layout space that image wrappers leave behind, especially in vendor signatures (Bench Dogs logo). NBSP (U+00A0) is treated as content so intentional `<p>&nbsp;</p>` blank lines survive.
@@ -189,8 +189,21 @@ Nick has many sender mailboxes (~50+ Nick-prefixed alone, across multiple cold-e
 4. **Strip Office namespace tags**: `<o:p>`, `<v:imagedata>`, `<w:WordSection>`, `<m:math>`, `<st1:place>` — these don't render outside Outlook. Text content (rare) is preserved as a text node.
 5. **Strip Outlook ATP banners**: orange-background spans / paragraphs containing only "EXTERNAL" or "[EXTERNAL]" — Defender for Office 365 injects these on incoming external emails. Not part of the conversation.
 6. **Force inline `margin: 0` on all `<p>` and `<div>`**: this is the key visual fix. Outlook's compose engine emits `<p class="MsoNormal">` blocks assuming Outlook's stylesheet (margin: 0) renders them tight. Apollo's TinyMCE editor doesn't ship that CSS so `<p>` picks up browser default ~16px margins, which compound visibly on Outlook's `<p>&nbsp;</p>` blank-line spacers. Inline `margin: 0` neutralizes the default. Elements with explicit margin (e.g., `margin-bottom: 12pt` on the From-block) are skipped — explicit Outlook margins stay intact.
+7. **Normalize `font-family` across the body**: strip every `font-family` declaration from descendant inline styles, plus the legacy `face` attribute from any `<font>` tags. The outer Storm Search wrapper's `font-family: Calibri, Tahoma, sans-serif` then cascades through inheritance, giving the entire thread a uniform Calibri voice. Font-SIZE is intentionally preserved — quoted signatures designed at 11pt stay compact, 8pt confidentiality fine print stays small, 9pt centered banners stay subordinate. Without this size preservation, line-heights stack ugly and visual hierarchy collapses (confirmed by Nick on a real DXP/Premier-flow thread preview before shipping). Net effect: mixed-font noise (Aptos / Verdana / Times New Roman / Arial / Lucida Calligraphy / Segoe UI Emoji) all collapses to clean Calibri, but rhythm and emphasis stay intact.
 
-Then wrap the cleaned body in a default Calibri/Tahoma 12pt font block (matches Nick's preferred Storm Search outbound style). Nested children with their own font declarations still render in those fonts (preserving authentic mixed-sender thread appearance).
+Then wrap the cleaned body in a default Calibri/Tahoma 12pt font block (matches Nick's preferred Storm Search outbound style). With Pass 7 stripping inner `font-family` overrides, this wrapper now controls font-family for everything via inheritance. Inner `font-size` declarations still win over the wrapper's 12pt — that's the deliberate choice.
+
+### Rollback path (if Pass 7 ever causes problems)
+
+`src/thread-formatter-v1.js` is a frozen pre-Pass-7 snapshot. To revert:
+
+1. Edit `src/taskpane.html` — change the `thread-formatter.js?v=...` script tag to `thread-formatter-v1.js?v=...`
+2. Bump cache-bust letter on all three script tags
+3. `git add -A && git commit -m "..." && git push`
+4. Wait ~30-60 sec for GitHub Pages to redeploy
+5. Hard-refresh Outlook task pane
+
+Console will show `[formatter] thread-formatter-v1.js (pre-font-normalization fallback) loaded` confirming the fallback is live. Do not edit `thread-formatter-v1.js` — it's frozen by design.
 
 ## What Needs Work
 
@@ -237,11 +250,12 @@ Current approach: we wrap the cleaned-up Outlook body in a `<div style="font-fam
 - 2026-04-26: Resolved compounding-margin gap in quoted threads — was caused by Apollo's editor not having Outlook's MsoNormal `margin:0` CSS. Fixed by inlining `margin: 0` on every `<p>`/`<div>` during cleanup.
 - 2026-04-26: Resolved Bench Dogs logo gap in Todd's signature — was caused by image-stripping leaving empty `<p><span></span></p>` wrappers. Fixed by iterative cleanup pass that removes functionally empty paragraphs while preserving NBSP/`<br>`/anchor content.
 - 2026-04-26: Resolved residual Bench Dogs signature gap (the surviving doubled `<p>&nbsp;</p>` paragraphs that wrapped the logo image and remained as redundant spacers after Pass 2). Fixed by adding Pass 3 in `thread-formatter.js` that collapses runs of 2+ consecutive blank-line paragraphs (whitespace+NBSP+`<br>`-only) down to one. Singletons preserved. Confirmed by Nick on `v=20260426j` push: doubled blanks at all four occurrences in Todd's quoted thread collapsed to single blanks; rendered output matches Outlook closely.
+- 2026-04-26: Added Pass 7 (font-family normalization) in `v=20260426k`. Strips `font-family` from all descendant inline styles and `face` attr from `<font>` tags so the wrapper's Calibri 12pt cascades; preserves font-size, color, bold/italic, links, alignment, line-height, NBSPs. Reversed the prior strip-philosophy bullet "KEEP mixed fonts across nested quoted messages" — Nick judged the uniform Calibri look better after a chat-based dry run on a DXP/Premier-flow thread. **Important**: an earlier dry run that ALSO stripped font-size produced visibly bad output (huge spacing, blown-up confidentiality fine print) — that's why Pass 7 strips font-family ONLY. Frozen pre-Pass-7 snapshot kept at `src/thread-formatter-v1.js` for rollback (see HTML Cleanup Strategy → Rollback path above).
 - 2026-04-26: Test contacts removed manually by Nick after each test.
 
 ## Current Cache-Bust Version
 
-`v=20260426j` — bump the trailing letter on every code change so Office Add-in iframes pick up the new code instead of serving cached versions.
+`v=20260426k` — bump the trailing letter on every code change so Office Add-in iframes pick up the new code instead of serving cached versions.
 
 ## Quick Re-Test Procedure
 

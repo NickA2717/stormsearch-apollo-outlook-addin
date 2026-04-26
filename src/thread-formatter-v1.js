@@ -34,7 +34,9 @@
   "use strict";
 
   // Version stamp — confirm in console which formatter the iframe loaded.
-  console.log("[formatter] thread-formatter.js v=20260426k loaded");
+  // This is the FROZEN pre-Pass-7 snapshot, kept for rollback. Do not edit.
+  // To use as fallback: change taskpane.html script src to thread-formatter-v1.js.
+  console.log("[formatter] thread-formatter-v1.js (pre-font-normalization fallback) loaded");
 
   const STORM_FONT_STYLE =
     "font-family: Calibri, Tahoma, sans-serif; font-size: 12pt; color: rgb(0, 0, 0);";
@@ -191,46 +193,6 @@
       const prefix = existing && !existing.endsWith(";") ? existing + ";" : existing;
       el.setAttribute("style", "margin: 0;" + (prefix ? " " + prefix : ""));
     });
-
-    // Pass 7: normalize font-family across the body. Strip every
-    // `font-family` declaration from descendant inline styles so the outer
-    // Storm Search wrapper's `font-family: Calibri, Tahoma, sans-serif`
-    // cascades through inheritance. Also strip the legacy `face` attribute
-    // from any `<font>` tags.
-    //
-    // Font-SIZE is intentionally preserved — quoted threads have
-    // signatures designed at 11pt and fine print at 8pt/9pt; forcing those
-    // to 12pt blows up the visual hierarchy and stacks line-heights ugly.
-    // Confirmed by Nick on a real DXP/Premier-flow thread preview.
-    //
-    // Net effect: every line renders in Calibri (uniform "Storm Search"
-    // voice), but signatures stay compact at their authored sizes,
-    // confidentiality notices stay small, etc. Mixed-font visual noise
-    // (Aptos / Verdana / Times New Roman / Arial / Lucida Calligraphy /
-    // Segoe UI Emoji) all collapses to a single uniform Calibri rendering.
-    //
-    // Rollback: change taskpane.html script src from `thread-formatter.js`
-    // to `thread-formatter-v1.js` (frozen pre-Pass-7 snapshot), bump the
-    // cache-bust query letter, push.
-    let fontFamilyStripped = 0;
-    root.querySelectorAll("[style]").forEach((el) => {
-      const style = el.getAttribute("style") || "";
-      const declarations = style.split(";").map((s) => s.trim()).filter(Boolean);
-      const kept = declarations.filter((d) => !/^font-family\s*:/i.test(d));
-      if (kept.length !== declarations.length) {
-        fontFamilyStripped += (declarations.length - kept.length);
-        if (kept.length === 0) el.removeAttribute("style");
-        else el.setAttribute("style", kept.join("; ") + ";");
-      }
-    });
-    let fontFaceCleaned = 0;
-    root.querySelectorAll("font[face]").forEach((el) => {
-      el.removeAttribute("face");
-      fontFaceCleaned++;
-    });
-    console.log(
-      `[formatter] font-family normalize: ${fontFamilyStripped} declaration(s) stripped, ${fontFaceCleaned} <font face> attr(s) cleaned`
-    );
   }
 
   /**
