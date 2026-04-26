@@ -99,33 +99,31 @@
       }
     });
 
-    // Pass 5: convert every <p> to <div>. This is the BIG visual fix.
+    // Pass 5: force inline `margin: 0` on every <p> and <div>. THIS is the
+    // visual fix that actually works.
     //
-    // Outlook authors quoted threads using `<p class="MsoNormal">` and expects
-    // its own stylesheet (margin: 0 on MsoNormal) to render them tight. In
-    // Apollo's editor — and in any HTML renderer that doesn't ship Outlook's
-    // CSS — `<p>` tags pick up the browser default ~16px top + bottom margin.
-    // Empty `<p>&nbsp;</p>` separators (Outlook's blank lines) then compound,
-    // producing huge visible gaps that don't appear in actual Outlook.
+    // Why: Outlook authors quoted threads with `<p class="MsoNormal">` and
+    // assumes Outlook's stylesheet sets margin:0 on MsoNormal. Apollo's
+    // editor (TinyMCE-based) doesn't ship that CSS, so `<p>` picks up the
+    // browser default ~16px top+bottom margin. Empty `<p>&nbsp;</p>` spacers
+    // then compound, producing huge gaps.
     //
-    // `<div>` has no default vertical margin in any browser, so swapping every
-    // `<p>` for an equivalent `<div>` reproduces the tight spacing Outlook
-    // shows natively. All attributes (id, class, style) and children migrate
-    // unchanged so inline styling, signatures, fonts etc. stay authentic.
+    // We tried converting `<p>` → `<div>` but Apollo's editor has
+    // `forced_root_block: 'p'` and converts our divs BACK to paragraphs on
+    // load, undoing the fix. Inline styles, however, survive the editor
+    // round-trip cleanly.
     //
-    // This also aligns with Nick's preferred Storm Search outbound HTML style,
-    // which is exclusively `<div>`-based.
-    const ownerDoc = root.ownerDocument;
-    root.querySelectorAll("p").forEach((p) => {
-      const div = ownerDoc.createElement("div");
-      for (let i = 0; i < p.attributes.length; i++) {
-        const attr = p.attributes[i];
-        div.setAttribute(attr.name, attr.value);
+    // We only add `margin: 0` if the element doesn't already declare a
+    // margin (or margin-top/bottom etc.) — explicit margins in the source
+    // (e.g., the From-block's `margin-bottom: 12pt`) stay intact.
+    root.querySelectorAll("p, div").forEach((el) => {
+      const existing = (el.getAttribute("style") || "").trim();
+      // Skip if any margin declaration is already in the style.
+      if (/(?:^|;)\s*margin(?:-(?:top|bottom|left|right))?\s*:/i.test(existing)) {
+        return;
       }
-      while (p.firstChild) {
-        div.appendChild(p.firstChild);
-      }
-      p.parentNode.replaceChild(div, p);
+      const prefix = existing && !existing.endsWith(";") ? existing + ";" : existing;
+      el.setAttribute("style", "margin: 0;" + (prefix ? " " + prefix : ""));
     });
   }
 
