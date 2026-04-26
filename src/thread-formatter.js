@@ -34,7 +34,7 @@
   "use strict";
 
   // Version stamp — confirm in console which formatter the iframe loaded.
-  console.log("[formatter] thread-formatter.js v=20260426i loaded");
+  console.log("[formatter] thread-formatter.js v=20260426j loaded");
 
   const STORM_FONT_STYLE =
     "font-family: Calibri, Tahoma, sans-serif; font-size: 12pt; color: rgb(0, 0, 0);";
@@ -104,7 +104,37 @@
       console.log(`[formatter] empty-paragraph cleanup removed ${totalRemoved} element(s) over ${safety} pass(es)`);
     }
 
-    // Pass 3: Office namespace elements that don't render outside Outlook
+    // Pass 3: collapse runs of consecutive blank-line paragraphs to a single
+    // one. A "blank line" is a <p>/<div> containing only whitespace + NBSPs
+    // (or a <br>) and no real content. These stack up where an image-spacer
+    // pattern lost its image during stripping — vendor logo signatures wrap
+    // the logo with NBSP paragraphs, and removing the image leaves the
+    // spacers visible as dead vertical space. Singletons are kept
+    // (intentional spacing); only runs of 2+ collapse.
+    const isBlankLine = (el) => {
+      if (el.querySelector("img, video, object, embed, hr, a[name], input, table")) return false;
+      return /^\s*$/.test(el.textContent);
+    };
+    let collapsedCount = 0;
+    root.querySelectorAll("p, div").forEach((el) => {
+      if (!isBlankLine(el)) return;
+      let prev = el.previousSibling;
+      while (prev && prev.nodeType === 3 && /^\s*$/.test(prev.textContent)) {
+        prev = prev.previousSibling;
+      }
+      if (
+        prev &&
+        prev.nodeType === 1 &&
+        (prev.tagName === "P" || prev.tagName === "DIV") &&
+        isBlankLine(prev)
+      ) {
+        el.remove();
+        collapsedCount++;
+      }
+    });
+    console.log(`[formatter] collapsed ${collapsedCount} consecutive blank-line element(s)`);
+
+    // Pass 4: Office namespace elements that don't render outside Outlook
     // (<o:p>, <v:imagedata>, etc.). Match by tag name prefix.
     Array.from(root.getElementsByTagName("*")).forEach((el) => {
       const tag = el.tagName.toLowerCase();
@@ -128,14 +158,14 @@
       }
     });
 
-    // Pass 4: ATP "EXTERNAL" banners.
+    // Pass 5: ATP "EXTERNAL" banners.
     root.querySelectorAll("span, p, div").forEach((el) => {
       if (isExternalAtpBanner(el)) {
         el.remove();
       }
     });
 
-    // Pass 5: force inline `margin: 0` on every <p> and <div>. THIS is the
+    // Pass 6: force inline `margin: 0` on every <p> and <div>. THIS is the
     // visual fix that actually works.
     //
     // Why: Outlook authors quoted threads with `<p class="MsoNormal">` and

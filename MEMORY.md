@@ -239,7 +239,7 @@ Current approach: we wrap the cleaned-up Outlook body in a `<div style="font-fam
 
 ## Current Cache-Bust Version
 
-`v=20260426h` — bump the trailing letter on every code change so Office Add-in iframes pick up the new code instead of serving cached versions.
+`v=20260426j` — bump the trailing letter on every code change so Office Add-in iframes pick up the new code instead of serving cached versions.
 
 ## Quick Re-Test Procedure
 
