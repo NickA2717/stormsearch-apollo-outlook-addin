@@ -181,13 +181,14 @@ Nick has many sender mailboxes (~50+ Nick-prefixed alone, across multiple cold-e
 
 ## HTML Cleanup Strategy — final design
 
-`thread-formatter.js` uses browser-native `DOMParser` to walk the compose body as a tree. Five cleanup passes:
+`thread-formatter.js` uses browser-native `DOMParser` to walk the compose body as a tree. Six cleanup passes:
 
 1. **Strip security/non-rendering elements**: `<script>`, `<style>`, `<noscript>`
 2. **Strip images and embedded media**: `<img>`, `<video>`, `<object>`, `<embed>` — per Nick's preference (broken placeholders look worse than absent images). After stripping, run an iterative pass that removes paragraphs/divs left functionally empty (no text, no `<br>`, no named anchor) — this collapses the layout space that image wrappers leave behind, especially in vendor signatures (Bench Dogs logo). NBSP (U+00A0) is treated as content so intentional `<p>&nbsp;</p>` blank lines survive.
-3. **Strip Office namespace tags**: `<o:p>`, `<v:imagedata>`, `<w:WordSection>`, `<m:math>`, `<st1:place>` — these don't render outside Outlook. Text content (rare) is preserved as a text node.
-4. **Strip Outlook ATP banners**: orange-background spans / paragraphs containing only "EXTERNAL" or "[EXTERNAL]" — Defender for Office 365 injects these on incoming external emails. Not part of the conversation.
-5. **Force inline `margin: 0` on all `<p>` and `<div>`**: this is the key visual fix. Outlook's compose engine emits `<p class="MsoNormal">` blocks assuming Outlook's stylesheet (margin: 0) renders them tight. Apollo's TinyMCE editor doesn't ship that CSS so `<p>` picks up browser default ~16px margins, which compound visibly on Outlook's `<p>&nbsp;</p>` blank-line spacers. Inline `margin: 0` neutralizes the default. Elements with explicit margin (e.g., `margin-bottom: 12pt` on the From-block) are skipped — explicit Outlook margins stay intact.
+3. **Collapse consecutive blank-line paragraphs**: walk `<p>`/`<div>` siblings; when a blank-line element (whitespace + NBSPs + `<br>`-only, no real content) is immediately preceded by another blank-line element at the same level, remove it. Singletons preserved as intentional spacing. Handles vendor signatures where image-spacer pairs (logo wrapped by NBSP paragraphs) lose their image during Pass 2 and leave the spacers stacked with nothing between them, producing visible vertical gaps. The Pass 2 predicate excludes NBSP from "empty" (so `<p>&nbsp;</p>` survives), but this pass treats NBSP as blank when collapsing redundant runs — different semantics for different cleanup goals.
+4. **Strip Office namespace tags**: `<o:p>`, `<v:imagedata>`, `<w:WordSection>`, `<m:math>`, `<st1:place>` — these don't render outside Outlook. Text content (rare) is preserved as a text node.
+5. **Strip Outlook ATP banners**: orange-background spans / paragraphs containing only "EXTERNAL" or "[EXTERNAL]" — Defender for Office 365 injects these on incoming external emails. Not part of the conversation.
+6. **Force inline `margin: 0` on all `<p>` and `<div>`**: this is the key visual fix. Outlook's compose engine emits `<p class="MsoNormal">` blocks assuming Outlook's stylesheet (margin: 0) renders them tight. Apollo's TinyMCE editor doesn't ship that CSS so `<p>` picks up browser default ~16px margins, which compound visibly on Outlook's `<p>&nbsp;</p>` blank-line spacers. Inline `margin: 0` neutralizes the default. Elements with explicit margin (e.g., `margin-bottom: 12pt` on the From-block) are skipped — explicit Outlook margins stay intact.
 
 Then wrap the cleaned body in a default Calibri/Tahoma 12pt font block (matches Nick's preferred Storm Search outbound style). Nested children with their own font declarations still render in those fonts (preserving authentic mixed-sender thread appearance).
 
@@ -235,6 +236,7 @@ Current approach: we wrap the cleaned-up Outlook body in a `<div style="font-fam
 - 2026-04-26: Confirmed Todd Shertzer (Bench Dogs) push to Claude Test sequence with full body landed in Apollo. Verified via console logs (`[apollo] verify body length: 23490`) and Apollo task-panel screenshot.
 - 2026-04-26: Resolved compounding-margin gap in quoted threads — was caused by Apollo's editor not having Outlook's MsoNormal `margin:0` CSS. Fixed by inlining `margin: 0` on every `<p>`/`<div>` during cleanup.
 - 2026-04-26: Resolved Bench Dogs logo gap in Todd's signature — was caused by image-stripping leaving empty `<p><span></span></p>` wrappers. Fixed by iterative cleanup pass that removes functionally empty paragraphs while preserving NBSP/`<br>`/anchor content.
+- 2026-04-26: Resolved residual Bench Dogs signature gap (the surviving doubled `<p>&nbsp;</p>` paragraphs that wrapped the logo image and remained as redundant spacers after Pass 2). Fixed by adding Pass 3 in `thread-formatter.js` that collapses runs of 2+ consecutive blank-line paragraphs (whitespace+NBSP+`<br>`-only) down to one. Singletons preserved. Confirmed by Nick on `v=20260426j` push: doubled blanks at all four occurrences in Todd's quoted thread collapsed to single blanks; rendered output matches Outlook closely.
 - 2026-04-26: Test contacts removed manually by Nick after each test.
 
 ## Current Cache-Bust Version
