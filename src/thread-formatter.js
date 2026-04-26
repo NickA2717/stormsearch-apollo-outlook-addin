@@ -34,7 +34,7 @@
   "use strict";
 
   // Version stamp — confirm in console which formatter the iframe loaded.
-  console.log("[formatter] thread-formatter.js v=20260426k loaded");
+  console.log("[formatter] thread-formatter.js v=20260426l loaded");
 
   const STORM_FONT_STYLE =
     "font-family: Calibri, Tahoma, sans-serif; font-size: 12pt; color: rgb(0, 0, 0);";
@@ -192,35 +192,60 @@
       el.setAttribute("style", "margin: 0;" + (prefix ? " " + prefix : ""));
     });
 
-    // Pass 7: normalize font-family across the body. Strip every
-    // `font-family` declaration from descendant inline styles so the outer
-    // Storm Search wrapper's `font-family: Calibri, Tahoma, sans-serif`
-    // cascades through inheritance. Also strip the legacy `face` attribute
-    // from any `<font>` tags.
+    // Pass 7: normalize font-family + collapse main-body font-sizes.
     //
-    // Font-SIZE is intentionally preserved — quoted threads have
-    // signatures designed at 11pt and fine print at 8pt/9pt; forcing those
-    // to 12pt blows up the visual hierarchy and stacks line-heights ugly.
-    // Confirmed by Nick on a real DXP/Premier-flow thread preview.
+    // (a) Strip every `font-family` declaration from descendant inline styles
+    // so the outer Storm Search wrapper's `font-family: Calibri, Tahoma,
+    // sans-serif` cascades through inheritance. Also strip the legacy `face`
+    // attribute from any `<font>` tags.
     //
-    // Net effect: every line renders in Calibri (uniform "Storm Search"
-    // voice), but signatures stay compact at their authored sizes,
-    // confidentiality notices stay small, etc. Mixed-font visual noise
-    // (Aptos / Verdana / Times New Roman / Arial / Lucida Calligraphy /
-    // Segoe UI Emoji) all collapses to a single uniform Calibri rendering.
+    // (b) For each `font-size: Npt` in the 10pt–12pt range, normalize to
+    // 12pt. Sizes <10pt (8pt confidentiality notices, 9pt centered DXP-style
+    // banners) are PRESERVED so fine print stays fine print. Sizes >12pt
+    // are also preserved (probable headlines).
+    //
+    // Why this range: Outlook senders default to 11pt or 12pt, and quote
+    // blocks often slip in 10pt. Without (b), the typed reply renders at
+    // 12pt while quoted bodies render at 11pt — cosmetically inconsistent
+    // even though authentic. With (b), main-body text unifies at 12pt
+    // across reply + quoted thread, but the deliberate hierarchy markers
+    // (small fine print) stay visually distinct.
+    //
+    // Confirmed by Nick on real DXP/Premier-flow thread previews — earlier
+    // attempts at "everything to 12pt" blew up 8pt/9pt fine print and
+    // looked horrendous, hence the bounded range.
     //
     // Rollback: change taskpane.html script src from `thread-formatter.js`
     // to `thread-formatter-v1.js` (frozen pre-Pass-7 snapshot), bump the
     // cache-bust query letter, push.
+    const FONT_SIZE_PT_RE = /^font-size\s*:\s*(\d+(?:\.\d+)?)\s*pt$/i;
     let fontFamilyStripped = 0;
+    let fontSizeNormalized = 0;
     root.querySelectorAll("[style]").forEach((el) => {
       const style = el.getAttribute("style") || "";
       const declarations = style.split(";").map((s) => s.trim()).filter(Boolean);
-      const kept = declarations.filter((d) => !/^font-family\s*:/i.test(d));
-      if (kept.length !== declarations.length) {
-        fontFamilyStripped += (declarations.length - kept.length);
-        if (kept.length === 0) el.removeAttribute("style");
-        else el.setAttribute("style", kept.join("; ") + ";");
+      const transformed = declarations
+        .filter((d) => {
+          if (/^font-family\s*:/i.test(d)) {
+            fontFamilyStripped++;
+            return false;
+          }
+          return true;
+        })
+        .map((d) => {
+          const m = d.match(FONT_SIZE_PT_RE);
+          if (!m) return d;
+          const pt = parseFloat(m[1]);
+          if (pt >= 10 && pt <= 12 && pt !== 12) {
+            fontSizeNormalized++;
+            return "font-size: 12pt";
+          }
+          return d;
+        });
+      if (transformed.length === 0) {
+        el.removeAttribute("style");
+      } else {
+        el.setAttribute("style", transformed.join("; ") + ";");
       }
     });
     let fontFaceCleaned = 0;
@@ -229,7 +254,7 @@
       fontFaceCleaned++;
     });
     console.log(
-      `[formatter] font-family normalize: ${fontFamilyStripped} declaration(s) stripped, ${fontFaceCleaned} <font face> attr(s) cleaned`
+      `[formatter] font normalize: ${fontFamilyStripped} font-family stripped, ${fontSizeNormalized} font-sizes 10-12pt collapsed to 12pt, ${fontFaceCleaned} <font face> attr(s) cleaned`
     );
   }
 
