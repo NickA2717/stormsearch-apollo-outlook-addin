@@ -66,6 +66,36 @@
     // Pass 2: images and embedded media (per project decision).
     if (stripImages) {
       root.querySelectorAll("img, video, object, embed").forEach((el) => el.remove());
+
+      // Strip image-only wrappers left behind. Outlook signatures often have
+      // `<p class="MsoNormal"><span><img src="..."></span></p>` blocks. After
+      // removing the <img>, the wrapper paragraph and span are still here
+      // taking ~1 line of vertical space each. We remove paragraphs/divs that
+      // have no real content left, BUT we preserve intentional blank lines:
+      //   - `<p>&nbsp;</p>` → keep (NBSP is content)
+      //   - `<p><br></p>` → keep (BR is a deliberate line break)
+      //   - `<div><a name="anchor"></a></div>` → keep (named anchors are
+      //     meaningful even when empty)
+      //   - `<p><span></span></p>` after image strip → remove (no content)
+      const isFunctionallyEmpty = (el) => {
+        if (el.querySelector("br, hr, a[name], input")) return false;
+        const text = el.textContent;
+        if (text.length === 0) return true;
+        // ASCII whitespace only counts as empty; NBSP (U+00A0) counts as content.
+        return /^[\u0020\u0009\u000A\u000D]*$/.test(text);
+      };
+      let changed = true;
+      let safety = 0;
+      while (changed && safety < 12) {
+        changed = false;
+        safety++;
+        root.querySelectorAll("p, div").forEach((el) => {
+          if (isFunctionallyEmpty(el)) {
+            el.remove();
+            changed = true;
+          }
+        });
+      }
     }
 
     // Pass 3: Office namespace elements that don't render outside Outlook
