@@ -33,6 +33,9 @@
 (function (global) {
   "use strict";
 
+  // Version stamp — confirm in console which formatter the iframe loaded.
+  console.log("[formatter] thread-formatter.js v=20260426i loaded");
+
   const STORM_FONT_STYLE =
     "font-family: Calibri, Tahoma, sans-serif; font-size: 12pt; color: rgb(0, 0, 0);";
 
@@ -86,6 +89,7 @@
       };
       let changed = true;
       let safety = 0;
+      let totalRemoved = 0;
       while (changed && safety < 12) {
         changed = false;
         safety++;
@@ -93,9 +97,11 @@
           if (isFunctionallyEmpty(el)) {
             el.remove();
             changed = true;
+            totalRemoved++;
           }
         });
       }
+      console.log(`[formatter] empty-paragraph cleanup removed ${totalRemoved} element(s) over ${safety} pass(es)`);
     }
 
     // Pass 3: Office namespace elements that don't render outside Outlook
