@@ -398,13 +398,41 @@
           "warn");
       }
 
-      // 3. Discard the Outlook draft.
+      // 3. Discard the Outlook draft. Office.js close() has changed twice; try
+      //    the modern signature first, then legacy, then bare close. New Outlook
+      //    for Mac sometimes ignores discardItem and saves the draft anyway, so
+      //    we additionally clear the body to a marker so any persisted draft is
+      //    obviously a leftover.
       try {
-        Office.context.mailbox.item.close({ discardItem: true });
-      } catch (_) {
-        // Older Outlook may not support discardItem option — fall back to plain close.
-        try { Office.context.mailbox.item.close(); } catch (_) {}
-      }
+        const item = Office.context.mailbox.item;
+        // Replace body with a marker BEFORE closing — if Outlook saves anyway,
+        // the persisted draft will be empty/marked rather than a duplicate of
+        // what we just pushed.
+        try {
+          item.body.setAsync(
+            "[Pushed to Apollo — safe to delete this draft]",
+            { coercionType: Office.CoercionType.Text },
+            () => {}
+          );
+        } catch (_) {}
+
+        // Modern: close({ closeBehavior: Discard }) — Mailbox 1.10+
+        const CloseBehavior = Office.MailboxEnums && Office.MailboxEnums.CloseBehavior;
+        if (CloseBehavior && CloseBehavior.Discard) {
+          try {
+            item.close({ closeBehavior: CloseBehavior.Discard });
+          } catch (_) {
+            // Legacy fallback
+            try { item.close({ discardItem: true }); } catch (_) {
+              try { item.close(); } catch (_) {}
+            }
+          }
+        } else {
+          try { item.close({ discardItem: true }); } catch (_) {
+            try { item.close(); } catch (_) {}
+          }
+        }
+      } catch (_) {}
     } catch (err) {
       setStatus("status-area", "", null);
       setStatus("result-area", "Push failed: " + err.message, "error");

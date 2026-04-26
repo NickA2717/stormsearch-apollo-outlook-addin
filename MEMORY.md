@@ -135,18 +135,22 @@ Nick has many sender mailboxes (~50+ Nick-prefixed alone, across multiple cold-e
 
 ---
 
-## Build Phases
+## Build Phases (current)
 
-- ✅ Phase 0: Project folder created at `/Users/nickmini/*CLAUDE CODE - WORK*/stormsearch-apollo-outlook-addin/`
-- ✅ Phase 1: GitHub repo + tooling setup (gh CLI installed, auth done as NickA2717)
-- ✅ Phase 2: All code written — manifest, taskpane (HTML/CSS/JS), apollo.js, thread-formatter.js
+- ✅ Phase 0: Project folder created
+- ✅ Phase 1: GitHub repo + tooling (gh CLI auth as NickA2717; git config set)
+- ✅ Phase 2: All code written — manifest.xml, taskpane (HTML/CSS/JS), apollo.js, thread-formatter.js
 - ✅ Phase 3: Deployed to GitHub Pages at https://nicka2717.github.io/stormsearch-apollo-outlook-addin/
-- ✅ Phase 4: Sideloaded via M365 admin center; admin propagation took several hours
-- ✅ Phase 5: Add-in loads in Outlook (button + UI confirmed)
-- ✅ Phase 6: Diagnosed Apollo CORS block — Apollo's API doesn't allow direct browser fetch from our origin
-- ✅ Phase 7: Cloudflare Worker proxy built and deployed at `https://stormsearch-apollo-proxy.n-alioto7.workers.dev`
-- 🔄 Phase 8: Update apollo.js + push to Pages + end-to-end test
-- ⏳ Phase 9: Polish based on Nick's first-week feedback
+- ✅ Phase 4: Sideloaded via M365 admin center; took ~hours to propagate (Microsoft normal range)
+- ✅ Phase 5: Add-in loads in Outlook (button + task pane confirmed)
+- ✅ Phase 6: Apollo CORS block diagnosed — Apollo doesn't allow direct browser fetch from our origin
+- ✅ Phase 7: Cloudflare Worker proxy built + deployed at `https://stormsearch-apollo-proxy.n-alioto7.workers.dev`
+- ✅ Phase 8: apollo.js routed through proxy; mailboxes/contacts/sequences load
+- ✅ Phase 9: First successful end-to-end push (Todd Shertzer @ Bench Dogs into Claude Test) verified via post-PUT GET
+- ✅ Phase 10: Pushes are reliable; all retries/verification logic in place; console logs available
+- 🔄 Phase 11: Polish HTML output to look as close to a real Outlook thread as possible (DOM-based rewrite of formatter, minimal cleanup)
+- ⏳ Phase 12: Address Outlook draft persistence (close() doesn't always discard on new Outlook for Mac)
+- ⏳ Phase 13: Optional: collapse Storm Search outbound content into Nick's preferred clean Calibri 12pt structure
 
 ## CORS Proxy (Cloudflare Worker)
 
@@ -159,6 +163,62 @@ Nick has many sender mailboxes (~50+ Nick-prefixed alone, across multiple cold-e
 - Origin allowlist: `nicka2717.github.io`, `outlook.office.com`, `outlook.cloud.microsoft`, plus Office 365 iframe hosts
 
 **Important deploy gotcha:** wrangler can't build from paths containing asterisks (folder name `*CLAUDE CODE - WORK*` breaks esbuild — interprets asterisks as glob wildcards). Workaround: copy `worker/` to a clean path like `/tmp/sapw` before running `wrangler deploy`.
+
+## What's Working
+
+- ✅ Add-in button appears in Outlook compose ribbon
+- ✅ Settings panel takes Apollo API key (stored in roaming settings, never in repo or chat)
+- ✅ Contact lookup by recipient email (with multi-match dropdown when 2+ found)
+- ✅ Mailbox dropdown populated from Apollo's email_accounts
+- ✅ Sequence dropdown populated from active sequences
+- ✅ "Push to Apollo" enrolls contact in chosen sequence
+- ✅ Body push to step 1 (Manual email) works via API — verified by post-PUT GET
+- ✅ Search retries on enrollment race (queued message takes a moment to materialize)
+- ✅ Console logging throughout (`[push]` and `[apollo]` prefixes) for debugging
+- ✅ Failure modes surface in the result banner with explicit reason
+
+## What Needs Work
+
+- 🔧 **HTML cleanup is being rewritten** (Phase 11): Outlook's compose body has heavy markup with mixed fonts, Mso classes, empty paragraphs, safelinks, etc. Earlier regex-based stripping was over-aggressive — it stripped Nick's intended blank lines (empty divs ARE the spacing in Outlook). New approach: use DOMParser, do MINIMAL cleanup. Strip only:
+  - `<script>` / `<style>` / `<noscript>` (security)
+  - `<img>` / `<video>` / `<object>` / `<embed>` (per Nick's image preference)
+  - Outlook ATP "EXTERNAL" orange-banner spans (not part of conversation)
+  - `<o:p>` / `<v:>` / `<w:>` / `<m:>` / `<st1:>` namespaced tags (don't render outside Outlook)
+  - MSO conditional comments
+  KEEP everything else (empty blocks, mso classes, safelinks, mixed fonts) — this is what makes the email look authentically "Outlook".
+- 🔧 **Outlook draft persistence** (Phase 12): `Office.context.mailbox.item.close({ discardItem: true })` doesn't reliably delete the draft on new Outlook for Mac. Improvements added:
+  1. Try modern `closeBehavior: CloseBehavior.Discard` first (Mailbox 1.10+)
+  2. Fall back to legacy `discardItem: true`
+  3. Before closing, replace body with marker text "[Pushed to Apollo — safe to delete]" so persisted drafts are obviously stale
+  Long-term: may need to switch the manifest to require Mailbox 1.10+ explicitly, or add a "delete draft from server" via Microsoft Graph if persistence persists.
+
+## Nick's Preferred Storm Search Outbound HTML Style
+
+When Nick (or Storm Search) writes an outbound email body in a sequence template,
+the canonical clean HTML looks like:
+
+```html
+<div style="font-family: Calibri, Tahoma, sans-serif; font-size: 12pt;">NAME</div>
+<div style="font-family: Calibri, Tahoma, sans-serif; font-size: 12pt;">&nbsp;</div>
+<div style="font-family: Calibri, Tahoma, sans-serif; font-size: 12pt;">PARAGRAPH</div>
+<div style="font-family: Calibri, Tahoma, sans-serif; font-size: 12pt;">&nbsp;</div>
+<div style="font-family: Calibri, Tahoma, sans-serif; font-size: 12pt;">PARAGRAPH</div>
+```
+
+Pattern:
+- One div per logical line
+- Empty `<div>&nbsp;</div>` blocks for blank lines
+- Single font: Calibri, Tahoma, sans-serif at 12pt
+- No nested spans, no Mso clutter, no mixed colors
+
+Current approach: we wrap the cleaned-up Outlook body in a `<div style="font-family: Calibri, Tahoma, sans-serif; font-size: 12pt;">` block, which becomes the default font. Nested children that explicitly set their own font (Todd's Verdana signature, etc.) still render in those fonts — that's authentic.
+
+**Possible future enhancement (per Nick's "last resort" idea):** detect the boundary between Nick's typed reply and the quoted thread (Outlook marks it with `<a name="_MailOriginal">` or `<div id="divRplyFwdMsg">`), and re-render Nick's portion using the clean Storm Search template. Quoted thread stays as-is.
+
+## Test Status
+
+- 2026-04-26: Confirmed Todd Shertzer (Bench Dogs) push to Claude Test sequence with full body landed in Apollo. Verified via console logs (`[apollo] verify body length: 23490`) and Apollo task-panel screenshot. Subsequent visual cleanup still in flight.
+- 2026-04-26: Test contacts removed manually by Nick after testing.
 
 ## Repo & Hosting
 
