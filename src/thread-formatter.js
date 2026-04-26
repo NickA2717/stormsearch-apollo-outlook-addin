@@ -98,6 +98,35 @@
         el.remove();
       }
     });
+
+    // Pass 5: convert every <p> to <div>. This is the BIG visual fix.
+    //
+    // Outlook authors quoted threads using `<p class="MsoNormal">` and expects
+    // its own stylesheet (margin: 0 on MsoNormal) to render them tight. In
+    // Apollo's editor — and in any HTML renderer that doesn't ship Outlook's
+    // CSS — `<p>` tags pick up the browser default ~16px top + bottom margin.
+    // Empty `<p>&nbsp;</p>` separators (Outlook's blank lines) then compound,
+    // producing huge visible gaps that don't appear in actual Outlook.
+    //
+    // `<div>` has no default vertical margin in any browser, so swapping every
+    // `<p>` for an equivalent `<div>` reproduces the tight spacing Outlook
+    // shows natively. All attributes (id, class, style) and children migrate
+    // unchanged so inline styling, signatures, fonts etc. stay authentic.
+    //
+    // This also aligns with Nick's preferred Storm Search outbound HTML style,
+    // which is exclusively `<div>`-based.
+    const ownerDoc = root.ownerDocument;
+    root.querySelectorAll("p").forEach((p) => {
+      const div = ownerDoc.createElement("div");
+      for (let i = 0; i < p.attributes.length; i++) {
+        const attr = p.attributes[i];
+        div.setAttribute(attr.name, attr.value);
+      }
+      while (p.firstChild) {
+        div.appendChild(p.firstChild);
+      }
+      p.parentNode.replaceChild(div, p);
+    });
   }
 
   /**
