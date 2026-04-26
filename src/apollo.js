@@ -14,7 +14,9 @@
 class ApolloClient {
   constructor(apiKey) {
     this.apiKey = apiKey;
-    this.baseUrl = "https://api.apollo.io/v1";
+    // Browser → CORS proxy → Apollo. The proxy adds the Access-Control-Allow-Origin
+    // headers Apollo doesn't return for our origin. See worker/src/index.js.
+    this.baseUrl = "https://stormsearch-apollo-proxy.n-alioto7.workers.dev/v1";
   }
 
   async _request(method, path, body) {

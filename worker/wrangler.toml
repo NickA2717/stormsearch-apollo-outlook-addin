@@ -1,0 +1,7 @@
+name = "stormsearch-apollo-proxy"
+main = "src/index.js"
+compatibility_date = "2026-04-25"
+
+# Free-tier Workers run on *.workers.dev by default; no custom domain needed.
+# After `wrangler deploy`, the public URL will be:
+#   https://stormsearch-apollo-proxy.<your-cf-subdomain>.workers.dev

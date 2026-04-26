@@ -141,10 +141,24 @@ Nick has many sender mailboxes (~50+ Nick-prefixed alone, across multiple cold-e
 - ✅ Phase 1: GitHub repo + tooling setup (gh CLI installed, auth done as NickA2717)
 - ✅ Phase 2: All code written — manifest, taskpane (HTML/CSS/JS), apollo.js, thread-formatter.js
 - ✅ Phase 3: Deployed to GitHub Pages at https://nicka2717.github.io/stormsearch-apollo-outlook-addin/
-- ✅ Phase 4: Sideloaded via M365 admin center as "Push to Apollo Sequence", deployed to Nick (User-only)
-- 🔄 Phase 5: Waiting on Microsoft propagation (5 min – 72 hr per MS, typically 10-30 min)
-- ⏳ Phase 6: End-to-end test on a real reply
-- ⏳ Phase 7: Polish based on Nick's first-week feedback
+- ✅ Phase 4: Sideloaded via M365 admin center; admin propagation took several hours
+- ✅ Phase 5: Add-in loads in Outlook (button + UI confirmed)
+- ✅ Phase 6: Diagnosed Apollo CORS block — Apollo's API doesn't allow direct browser fetch from our origin
+- ✅ Phase 7: Cloudflare Worker proxy built and deployed at `https://stormsearch-apollo-proxy.n-alioto7.workers.dev`
+- 🔄 Phase 8: Update apollo.js + push to Pages + end-to-end test
+- ⏳ Phase 9: Polish based on Nick's first-week feedback
+
+## CORS Proxy (Cloudflare Worker)
+
+- Source: `worker/src/index.js`
+- Wrangler config: `worker/wrangler.toml`
+- Cloudflare account: `e66e78179c050c20a8e3844aa669089a` (n.alioto7@yahoo.com)
+- Workers subdomain: `n-alioto7.workers.dev` (auto-assigned)
+- Worker URL: `https://stormsearch-apollo-proxy.n-alioto7.workers.dev`
+- Health endpoint: `/health` returns `{ok:true,target:"https://api.apollo.io",time:...}`
+- Origin allowlist: `nicka2717.github.io`, `outlook.office.com`, `outlook.cloud.microsoft`, plus Office 365 iframe hosts
+
+**Important deploy gotcha:** wrangler can't build from paths containing asterisks (folder name `*CLAUDE CODE - WORK*` breaks esbuild — interprets asterisks as glob wildcards). Workaround: copy `worker/` to a clean path like `/tmp/sapw` before running `wrangler deploy`.
 
 ## Repo & Hosting
 
