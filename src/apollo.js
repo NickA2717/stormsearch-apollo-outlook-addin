@@ -164,20 +164,37 @@ class ApolloClient {
         });
         const messages = search.emailer_messages || search.messages || [];
         console.log(`[apollo] search attempt ${attempt + 1}: found ${messages.length} message(s)`, messages);
-        // Prefer a manual_email type message at step position 1, queued/pending/draft.
-        const candidate =
-          messages.find(m =>
-            (m.type === "manual_email" || m.emailer_step_type === "manual_email") &&
-            (m.status === "queued" || m.status === "pending" || m.status === "draft" || !m.status)
-          ) ||
-          messages.find(m =>
-            (m.emailer_step_position === 1 || m.position === 1) &&
-            (m.status === "queued" || m.status === "pending" || m.status === "draft" || !m.status)
-          ) ||
-          messages[0];
+
+        // Apollo can leave stale emailer_messages around from previous enrollments
+        // (e.g. when a contact is added, removed, then re-added). The search returns
+        // ALL of them. We need to target the message Apollo will ACTUALLY send next —
+        // which is the most-recently-created queued manual_email.
+        //
+        // Strategy: filter to manual_email + non-terminal status, then sort by
+        // created_at desc (with id-based fallback since MongoDB ObjectIds are
+        // lex-sortable by creation time on the first 8 hex chars).
+        const liveStatus = (s) =>
+          s === "queued" || s === "pending" || s === "draft" || s === "scheduled" || !s;
+        const isManualEmail = (m) =>
+          m.type === "manual_email" || m.emailer_step_type === "manual_email";
+
+        const sortNewestFirst = (a, b) => {
+          const aT = a.created_at || a.createdAt || a.id || "";
+          const bT = b.created_at || b.createdAt || b.id || "";
+          return String(bT).localeCompare(String(aT));
+        };
+
+        const manualCandidates = messages.filter(m => isManualEmail(m) && liveStatus(m.status)).sort(sortNewestFirst);
+        const step1Candidates = messages.filter(m =>
+          (m.emailer_step_position === 1 || m.position === 1) && liveStatus(m.status)
+        ).sort(sortNewestFirst);
+
+        const candidate = manualCandidates[0] || step1Candidates[0] || messages.slice().sort(sortNewestFirst)[0];
+
         if (candidate) {
           queuedMessage = candidate;
           messageId = candidate.id;
+          console.log(`[apollo] picked message id=${candidate.id} created_at=${candidate.created_at || candidate.createdAt} status=${candidate.status} type=${candidate.type || candidate.emailer_step_type} (${manualCandidates.length} manual candidate(s) of ${messages.length} total)`);
         }
       } catch (e) {
         console.warn(`[apollo] search failed on attempt ${attempt + 1}:`, e);
