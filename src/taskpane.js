@@ -361,10 +361,11 @@
     setStatus("result-area", "", null);
     setStatus("status-area", "Pushing to Apollo…", "info");
 
-    // Re-read the body NOW — not from draftContext, which was captured when the
-    // task pane loaded (before Nick typed his reply). Reading fresh here ensures
-    // whatever Nick has typed since the pane opened is included.
-    let freshBodyHtml;
+    // Read body fresh AND keep the cached one. Pick whichever has more content.
+    // - Fresh wins when Nick typed after pane-load (the original bug).
+    // - Cached wins if the fresh re-read returns empty or stripped content
+    //   (some Office.js / Outlook combos misbehave on second-read in compose).
+    let freshBodyHtml = "";
     try {
       freshBodyHtml = await new Promise((res, rej) =>
         Office.context.mailbox.item.body.getAsync(
@@ -372,12 +373,26 @@
           (r) => r.status === Office.AsyncResultStatus.Succeeded ? res(r.value) : rej(r.error)
         )
       );
-    } catch (_) {
-      freshBodyHtml = draftContext.bodyHtml; // fall back to cached if re-read fails
+    } catch (e) {
+      console.warn("[push] fresh body re-read failed:", e);
+    }
+    const cachedBody = (draftContext && draftContext.bodyHtml) || "";
+    const freshLen = (freshBodyHtml || "").length;
+    const cachedLen = cachedBody.length;
+    console.log(`[push] body sources — cached: ${cachedLen} chars, fresh: ${freshLen} chars`);
+    const bodyToUse = freshLen > cachedLen ? freshBodyHtml : cachedBody;
+    console.log(`[push] using ${freshLen > cachedLen ? "fresh" : "cached"} body, length: ${bodyToUse.length}`);
+
+    if (!bodyToUse) {
+      setStatus("status-area", "", null);
+      setStatus("result-area", "Push failed: couldn't read draft body from Outlook.", "error");
+      $("push-btn").disabled = false;
+      return;
     }
 
     // Format the body for Apollo.
-    const apolloHtml = ThreadFormatter.format(freshBodyHtml, { stripImages: true });
+    const apolloHtml = ThreadFormatter.format(bodyToUse, { stripImages: true });
+    console.log(`[push] formatted apolloHtml length: ${apolloHtml.length}; first 120 chars:`, apolloHtml.slice(0, 120));
 
     try {
       // 1. Add contact to sequence.
