@@ -173,10 +173,18 @@ class ApolloClient {
         // Strategy: filter to manual_email + non-terminal status, then sort by
         // created_at desc (with id-based fallback since MongoDB ObjectIds are
         // lex-sortable by creation time on the first 8 hex chars).
+        // Apollo's actual values (confirmed from production logs 2026-05-08):
+        //   type:   "outreach_manual_email"  (NOT "manual_email")
+        //   status: "drafted"                (NOT "queued"/"pending"/"draft")
+        // Keep older guesses too for forward-compat in case Apollo varies by account/version.
         const liveStatus = (s) =>
-          s === "queued" || s === "pending" || s === "draft" || s === "scheduled" || !s;
-        const isManualEmail = (m) =>
-          m.type === "manual_email" || m.emailer_step_type === "manual_email";
+          s === "drafted" || s === "queued" || s === "pending" || s === "draft" ||
+          s === "scheduled" || s === "unscheduled" || !s;
+        const isManualEmail = (m) => {
+          const t = m.type || m.emailer_step_type || "";
+          return t === "outreach_manual_email" || t === "manual_email" ||
+                 t.includes("manual"); // catch any other manual variant
+        };
 
         const sortNewestFirst = (a, b) => {
           const aT = a.created_at || a.createdAt || a.id || "";
