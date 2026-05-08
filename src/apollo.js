@@ -154,8 +154,8 @@ class ApolloClient {
     // 1. Find the queued manual email message — retry to dodge race on enrollment.
     let messageId = null;
     let queuedMessage = null;
-    for (let attempt = 0; attempt < 4 && !messageId; attempt++) {
-      if (attempt > 0) await new Promise(r => setTimeout(r, 600));
+    for (let attempt = 0; attempt < 6 && !messageId; attempt++) {
+      if (attempt > 0) await new Promise(r => setTimeout(r, 800));
       try {
         const search = await this._request("POST", "/emailer_messages/search", {
           contact_ids: [contactId],

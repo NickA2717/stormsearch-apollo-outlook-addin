@@ -361,8 +361,23 @@
     setStatus("result-area", "", null);
     setStatus("status-area", "Pushing to Apollo…", "info");
 
+    // Re-read the body NOW — not from draftContext, which was captured when the
+    // task pane loaded (before Nick typed his reply). Reading fresh here ensures
+    // whatever Nick has typed since the pane opened is included.
+    let freshBodyHtml;
+    try {
+      freshBodyHtml = await new Promise((res, rej) =>
+        Office.context.mailbox.item.body.getAsync(
+          Office.CoercionType.Html,
+          (r) => r.status === Office.AsyncResultStatus.Succeeded ? res(r.value) : rej(r.error)
+        )
+      );
+    } catch (_) {
+      freshBodyHtml = draftContext.bodyHtml; // fall back to cached if re-read fails
+    }
+
     // Format the body for Apollo.
-    const apolloHtml = ThreadFormatter.format(draftContext.bodyHtml, { stripImages: true });
+    const apolloHtml = ThreadFormatter.format(freshBodyHtml, { stripImages: true });
 
     try {
       // 1. Add contact to sequence.
