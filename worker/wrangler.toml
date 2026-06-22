@@ -1,7 +1,12 @@
-name = "stormsearch-apollo-proxy"
+name = "stormsearch-apollo-addin"
 main = "src/index.js"
 compatibility_date = "2026-04-25"
 
-# Free-tier Workers run on *.workers.dev by default; no custom domain needed.
-# After `wrangler deploy`, the public URL will be:
-#   https://stormsearch-apollo-proxy.<your-cf-subdomain>.workers.dev
+# This Worker serves BOTH the Outlook add-in front-end (static files in ./public)
+# AND the /v1/* Apollo CORS proxy — one origin, so the taskpane's proxy calls are
+# same-origin (no CORS needed). Hosted on the firm Cloudflare account (jyurk@).
+# Public URL after deploy: https://stormsearch-apollo-addin.<firm-subdomain>.workers.dev
+[assets]
+directory = "./public"
+html_handling = "none"        # serve /src/taskpane.html etc. directly (no clean-URL 307 redirect)
+not_found_handling = "none"   # non-asset paths (/v1/*, /health) fall through to the Worker

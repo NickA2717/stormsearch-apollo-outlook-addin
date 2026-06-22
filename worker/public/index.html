@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Storm Search × Apollo Outlook Add-in</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; color: #222; line-height: 1.55; }
+    h1 { font-size: 28px; margin-bottom: 4px; }
+    .subtitle { color: #666; margin-bottom: 24px; }
+    code { background: #f3f3f3; padding: 2px 6px; border-radius: 3px; font-size: 90%; }
+    a { color: #0078d4; }
+    .box { background: #f7f7f7; border-left: 3px solid #0078d4; padding: 12px 16px; margin: 16px 0; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Push to Apollo — Outlook Add-in</h1>
+  <div class="subtitle">Push your Outlook reply into an Apollo sequence so follow-ups continue automatically.</div>
+
+  <div class="box">
+    <strong>Manifest URL for sideloading:</strong><br>
+    <code>https://nicka2717.github.io/stormsearch-apollo-outlook-addin/manifest.xml</code>
+  </div>
+
+  <h2>What it does</h2>
+  <p>
+    When you reply to an email in Outlook, this add-in adds a <strong>Push to Apollo</strong> button.
+    Click it to send your typed reply into an Apollo sequence's manual email step,
+    automatically — no copy/paste needed. Apollo handles all the follow-up steps from there.
+  </p>
+
+  <h2>Setup</h2>
+  <ol>
+    <li>Sideload this manifest in your Outlook (admin → integrated apps → custom add-in)</li>
+    <li>Open any email reply window in Outlook</li>
+    <li>Click <strong>Push to Apollo</strong></li>
+    <li>Paste your Apollo API key in Settings (one-time, stored locally)</li>
+    <li>Pick contact + sender mailbox + sequence → Push</li>
+  </ol>
+
+  <p style="margin-top: 32px; font-size: 13px; color: #999;">
+    Source: <a href="https://github.com/NickA2717/stormsearch-apollo-outlook-addin">github.com/NickA2717/stormsearch-apollo-outlook-addin</a>
+  </p>
+</body>
+</html>

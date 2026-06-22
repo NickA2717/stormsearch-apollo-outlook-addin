@@ -1,3 +1,14 @@
+---
+title: Storm Search Apollo Outlook Add-in — README
+type: readme
+project-kind: code
+status: active
+tags: [readme, project, apollo, outlook, addin]
+related:
+  - "[[Storm Search Apollo Outlook Add-in]]"
+  - "[[+ Code Projects]]"
+---
+
 # Storm Search × Apollo — Outlook Add-in
 
 An Outlook add-in that pushes a typed email reply into an Apollo sequence's manual email step, then discards the Outlook draft. Apollo's auto follow-up steps continue from there.
@@ -61,7 +72,7 @@ Reply to any email → click **Push to Apollo** in the ribbon → confirm contac
 
 ## Development notes
 
-See `MEMORY.md` for full project context, decisions, and the Apollo threading research that shaped this design.
+See `learnings.md` for full project context, decisions, and the Apollo threading research that shaped this design.
 
 ## License
 

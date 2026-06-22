@@ -16,3 +16,7 @@
 # Node (in case we add tooling later)
 node_modules/
 package-lock.json
+
+.wrangler/
+worker/node_modules/
+.DS_Store
