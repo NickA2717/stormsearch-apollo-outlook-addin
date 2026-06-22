@@ -5,6 +5,3 @@ compatibility_date = "2026-04-25"
 # Free-tier Workers run on *.workers.dev by default; no custom domain needed.
 # After `wrangler deploy`, the public URL will be:
 #   https://stormsearch-apollo-proxy.<your-cf-subdomain>.workers.dev
-# NOTE: the LIVE proxy runs on Nick's PERSONAL Cloudflare (n-alioto7); redeploys
-# need that account's credentials. The add-in front-end is served by GitHub Pages
-# from this repo's root (nicka2717.github.io/stormsearch-apollo-outlook-addin/).
