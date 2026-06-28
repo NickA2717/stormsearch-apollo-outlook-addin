@@ -45,6 +45,8 @@ An Outlook add-in that pushes a typed email reply into an Apollo sequence's manu
 
 When you first open the add-in, it'll show a Settings panel asking for your Apollo API key. Paste it in. The key is stored locally in your Outlook profile via `Office.context.roamingSettings`. It never leaves your machine except to call Apollo's API directly.
 
+**Security rule (hard):** never paste the Apollo API key into chat, code, or any committed file — enter it ONLY in the add-in's Settings panel. (A chat-based leak forced a key rotation once; the add-in is built so the key only ever lives in roaming settings.)
+
 ### 3. Use it
 
 Reply to any email → click **Push to Apollo** in the ribbon → confirm contact, pick sender + sequence → done.
