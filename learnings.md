@@ -146,6 +146,12 @@ Uses browser-native `DOMParser` to walk the compose body as a tree. **Seven clea
      and Nick rejected it ("absolutely horrendous") — that's why Pass 7 strips font-family but only
      *bounds* font-size.
 
+8. **Repair literal markdown links** (2026-07-08, seen in Nick's production push): Outlook on the
+   web's compose editor (new Outlook for Mac uses the same engine) sometimes serializes links as
+   literal `[text](url)` — bare in a span OR as the display text inside a real `<a>` (even
+   safelinks-wrapped ones). Recipients would see the brackets. Bare ones become real anchors;
+   inside an anchor the markdown collapses to just the label.
+
 Then wrap the cleaned body in a default `Calibri, Tahoma, 12pt` block. Inner `font-size` declarations
 still win over the wrapper's 12pt — deliberate.
 
