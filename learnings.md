@@ -242,6 +242,35 @@ found and fixed. Keep all three in mind — they're the failure modes most likel
    the field that matters; never PUT to a message type you didn't create (automatic emails are
    Apollo's, not ours); never destroy the source (draft) unless the destination is verified.
 
+5. **(2026-07-08, Codex review — the full hardening pass, live as v=20260708f.)** An independent
+   Codex review (filed in the Brain: `Code Reviews/(2026-07-08) - Apollo_Outlook_Addin_Codex_Review.md`)
+   found the contact filter alone still left wrong-target paths. Now enforced:
+   - **Enrollment-bound targeting:** pre-enrollment message-id snapshot → the picker only accepts a
+     message CREATED BY THIS PUSH (snapshot-fail fallback: created <10 min ago), campaign re-checked
+     client-side, positively manual type + drafted status required, the enrollment response's
+     `current_step_id` preferred, and the any-type step-1 fallback is GONE.
+   - **Real verification:** every PUT is stamped with a unique HTML-comment marker
+     (`<!--sapw-…-->`); verify requires marker + contact + subject; a failed verify GET is a
+     FAILURE (the old code claimed success — and the old 20-char prefix check matched the shared
+     wrapper on EVERY push, so it could false-pass).
+   - **Enrollment guard:** positive confirmation our contact is in the add response; anything
+     uncertain stops before any search/write.
+   - **Draft safety:** recipient/subject/body re-read together at CLICK time (pane-load snapshot
+     drove contact selection — a recipient change would push to the old contact); exactly one
+     recipient required and it must still match; fresh-body-only (the "longer body wins" cached
+     fallback could push stale content); pre-discard re-read keeps the draft if it changed
+     mid-push; the marker `setAsync` is awaited before close.
+   - **Image host hardened:** key gate bound to the firm's Apollo `team_id` (worker secret
+     `FIRM_TEAM_ID`) — any other Apollo customer's valid key is rejected; RANDOM public keys
+     (content hash only for internal dedupe — hash URLs were computable by anyone with the bytes);
+     magic-byte validation; nosniff + CSP sandbox; early Content-Length reject; 500/day quota;
+     1-year KV retention.
+   - **Formatter:** kept images restricted to OUR image host + `data:` — arbitrary remote images
+     carried other senders' tracking pixels that would fire false opens on Apollo sends. Logos
+     still carry (cid logos are rewritten to our host before formatting).
+   - Deliberately open: Apollo key still in roamingSettings (Microsoft says don't — parked for a
+     proxy-held-key design pass); public git history not purged (Nick declined, accepted).
+
 **Diagnostic that surfaces all of the above:** the log line
 `[apollo] picked message id=... status=... type=... (N manual candidate(s) of M total)`. If a future
 Apollo change breaks the filter, Nick pastes that line and we update the strings.
