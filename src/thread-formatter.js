@@ -36,7 +36,7 @@
   "use strict";
 
   // Version stamp — confirm in console which formatter the iframe loaded.
-  console.log("[formatter] thread-formatter.js v=20260708d loaded");
+  console.log("[formatter] thread-formatter.js v=20260708f loaded");
 
   const STORM_FONT_STYLE =
     "font-family: Calibri, Tahoma, sans-serif; font-size: 12pt; color: rgb(0, 0, 0);";

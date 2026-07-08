@@ -24,7 +24,7 @@
 (function (global) {
   "use strict";
 
-  console.log("[inline-images] inline-images.js v=20260708e loaded");
+  console.log("[inline-images] inline-images.js v=20260708f loaded");
 
   const IMG_HOST = "https://apollo-addin-images.jyurk.workers.dev";
 
