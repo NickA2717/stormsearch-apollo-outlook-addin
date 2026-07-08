@@ -285,6 +285,9 @@ thread as-is.
 ---
 
 ## Debugging rules (2026-07-08 session)
+- **Test formatter changes against a REAL captured Outlook body, not only synthetic fixtures.**
+  The markdown-link defect (Pass 8) shipped past a green synthetic test because no fixture
+  carried OWA's actual link serialization. Keep a recent real push's HTML on hand as the fixture.
 - **Reproduce read-only first.** Diagnose from Apollo's real production records (message search,
   campaign contacts, message GETs) before reaching for a write-based test enrollment — the
   read-only path found the root cause without touching live sequences.
