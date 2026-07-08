@@ -44,25 +44,35 @@
   }
 
   /**
-   * Match a cid reference to an attachment. Outlook cids usually embed the
-   * attachment filename: "image001.png@01DC1234.5678" → name "image001.png".
-   * Fallbacks: substring match, then — if exactly one unmatched cid and one
-   * unused inline attachment remain — pair them (OWA sometimes uses opaque
-   * GUID cids that share nothing with the name).
+   * Match a cid reference to an attachment BY NAME ONLY. Outlook cids usually
+   * embed the attachment filename: "image001.png@01DC1234.5678" → name
+   * "image001.png"; substring match as a fallback. The old last-one-left
+   * pairing was removed from here (Codex finding 12): it could grab the wrong
+   * attachment when several cids were unmatched. The caller applies that
+   * fallback only in the unambiguous 1-cid-and-1-attachment case.
    */
   function matchAttachment(cid, attachments, usedIds) {
     const bare = cid.replace(/^cid:/i, "");
     const namePart = (bare.split("@")[0] || "").toLowerCase();
+    if (!namePart) return null;
     const unused = attachments.filter((a) => !usedIds.has(a.id));
     let hit = unused.find((a) => (a.name || "").toLowerCase() === namePart);
-    if (!hit && namePart) {
+    if (!hit) {
       hit = unused.find((a) => {
         const n = (a.name || "").toLowerCase();
         return n && (namePart.indexOf(n) !== -1 || n.indexOf(namePart) !== -1);
       });
     }
-    if (!hit && unused.length === 1) hit = unused[0];
     return hit || null;
+  }
+
+  /** Reject a promise after ms — one hung Office/network call must never
+   *  stall the push (Codex finding 12). */
+  function withTimeout(promise, ms, label) {
+    return Promise.race([
+      promise,
+      new Promise((_, rej) => setTimeout(() => rej(new Error(`${label} timed out after ${ms}ms`)), ms)),
+    ]);
   }
 
   function base64ToBytes(b64) {
@@ -89,11 +99,19 @@
   }
 
   async function uploadImage(bytes, contentType, apiKey) {
-    const res = await fetch(`${IMG_HOST}/img`, {
-      method: "POST",
-      headers: { "Content-Type": contentType, "X-Api-Key": apiKey },
-      body: bytes,
-    });
+    const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), 10000) : null;
+    let res;
+    try {
+      res = await fetch(`${IMG_HOST}/img`, {
+        method: "POST",
+        headers: { "Content-Type": contentType, "X-Api-Key": apiKey },
+        body: bytes,
+        signal: ctrl ? ctrl.signal : undefined,
+      });
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
     if (!res.ok) throw new Error(`image host rejected upload: ${res.status}`);
     const data = await res.json();
     if (!data || !data.url) throw new Error("image host returned no url");
@@ -131,8 +149,10 @@
 
     let attachments;
     try {
-      attachments = (await getAttachments(item)).filter(
-        (a) => a.attachmentType === "file" || a.isInline
+      // file AND inline (Codex finding 12) — regular file attachments are
+      // never legitimate cid targets.
+      attachments = (await withTimeout(getAttachments(item), 8000, "getAttachments")).filter(
+        (a) => a.attachmentType === "file" && a.isInline
       );
     } catch (e) {
       console.warn("[inline-images] getAttachmentsAsync failed — skipping:", e);
@@ -149,20 +169,38 @@
     const usedIds = new Set();
     const cidToUrl = {};
     let hosted = 0;
+    // Phase 1: name-based matches. Phase 2 (after the loop plan): the
+    // last-one-left pairing fires ONLY when exactly one cid is unmatched AND
+    // exactly one attachment is unused — anything more ambiguous stays cid.
+    const nameMatches = {};
+    cids.forEach((cid) => {
+      const att = matchAttachment(cid, attachments, usedIds);
+      if (att) {
+        nameMatches[cid] = att;
+        usedIds.add(att.id);
+      }
+    });
+    const unmatchedCids = cids.filter((c) => !nameMatches[c]);
+    const unusedAtts = attachments.filter((a) => !usedIds.has(a.id));
+    if (unmatchedCids.length === 1 && unusedAtts.length === 1) {
+      nameMatches[unmatchedCids[0]] = unusedAtts[0];
+      usedIds.add(unusedAtts[0].id);
+      console.log("[inline-images] paired the single remaining cid with the single remaining inline attachment");
+    }
+
     for (const cid of cids) {
       try {
-        const att = matchAttachment(cid, attachments, usedIds);
+        const att = nameMatches[cid];
         if (!att) {
           console.warn(`[inline-images] no attachment match for ${cid} — leaving as cid`);
           continue;
         }
-        usedIds.add(att.id);
         const ct = contentTypeForName(att.name);
         if (!ct) {
           console.warn(`[inline-images] unsupported image type for "${att.name}" — leaving as cid`);
           continue;
         }
-        const content = await getAttachmentContent(item, att.id);
+        const content = await withTimeout(getAttachmentContent(item, att.id), 8000, "getAttachmentContent");
         const b64Format =
           typeof Office !== "undefined" && Office.MailboxEnums
             ? Office.MailboxEnums.AttachmentContentFormat.Base64

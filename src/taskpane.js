@@ -422,7 +422,9 @@
 
     // Format the body for Apollo.
     const apolloHtml = ThreadFormatter.format(bodyForFormat, { stripImages: true });
-    console.log(`[push] formatted apolloHtml length: ${apolloHtml.length}; first 120 chars:`, apolloHtml.slice(0, 120));
+    // Log lengths only, never content — browser logs have been committed by
+    // accident before (Codex finding 16).
+    console.log(`[push] formatted apolloHtml length: ${apolloHtml.length}`);
 
     try {
       // 0. Snapshot the contact's existing messages in this sequence BEFORE
@@ -483,11 +485,12 @@
           "✓ Pushed to Apollo. Step 1's body is pre-filled — go to Apollo and click Send.",
           "success");
       } else {
-        // Fallback: clipboard. Tell the user WHY so we can debug.
-        await copyToClipboard(apolloHtml);
+        // Fallback: clipboard. Tell the user WHY so we can debug — and be
+        // honest about whether the copy actually worked (Codex cleanup item).
+        const copied = await copyToClipboard(apolloHtml);
         setStatus("status-area", "", null);
         setStatus("result-area",
-          `⚠ Contact added to sequence, but body push failed (${pushResult.reason}). The HTML is on your clipboard — paste it into Apollo step 1 and click Send. Your Outlook draft was kept as a backup.`,
+          `⚠ Contact added to sequence, but body push failed (${pushResult.reason}). ${copied ? "The HTML is on your clipboard — paste it into Apollo step 1 and click Send." : "Clipboard copy ALSO failed — your Outlook draft is the only copy; re-push or copy it manually."} Your Outlook draft was kept as a backup.`,
           "warn");
         // Keep the draft on failure (2026-07-08): the clipboard is fragile and the
         // draft is the only durable copy of the typed reply. Only a verified push
@@ -563,9 +566,10 @@
       ta.style.left = "-9999px";
       document.body.appendChild(ta);
       ta.select();
-      try { document.execCommand("copy"); } catch (_) {}
+      let ok = false;
+      try { ok = document.execCommand("copy") === true; } catch (_) {}
       document.body.removeChild(ta);
-      resolve();
+      resolve(ok);
     });
   }
 
