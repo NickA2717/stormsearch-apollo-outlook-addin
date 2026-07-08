@@ -19,8 +19,10 @@
  *
  * We strip:
  *   - <script>, <style>, MSO conditional comments → security / non-rendering
- *   - <img>, <video>, <object>, <embed> → user preference (broken placeholders)
- *   - "EXTERNAL" orange banner spans (Defender ATP injection) → not part of conversation
+ *   - non-renderable images (cid:/attachment-service) + <video>/<object>/<embed>;
+ *     hosted http(s) and data: images are KEPT (signature logos, Nick 2026-07-08)
+ *   - security banners: "EXTERNAL (EMAIL)", "CAUTION: …outside the organization…",
+ *     "You don't often get email from…" → not part of conversation
  *   - Office namespace elements like <o:p> → don't render in non-Outlook clients
  *
  * Then we wrap the result in Nick's preferred Storm Search default font block:
@@ -40,23 +42,6 @@
     "font-family: Calibri, Tahoma, sans-serif; font-size: 12pt; color: rgb(0, 0, 0);";
 
   /**
-   * Heuristic: is this element an Outlook ATP "EXTERNAL" warning banner?
-   * Microsoft Defender for Office 365 injects spans / paragraphs with an
-   * orange background color (#FF6600 family) and the text "EXTERNAL" or
-   * "[EXTERNAL]" before the body of any incoming external email.
-   */
-  function isExternalAtpBanner(el) {
-    if (!el) return false;
-    const text = (el.textContent || "").trim();
-    if (!/^\[?\s*EXTERNAL\s*\]?$/i.test(text)) return false;
-    const style = (el.getAttribute && el.getAttribute("style")) || "";
-    if (/background\s*:\s*#FF6600/i.test(style)) return true;
-    // Sometimes the orange is in a child span; accept the shorter trim+text match
-    // alone if the element is small (no other content beyond "EXTERNAL").
-    return el.children.length === 0 || el.children.length === 1;
-  }
-
-  /**
    * Walk the DOM tree and remove ATP banners, scripts, styles, images, and
    * Office namespace elements. Returns nothing — modifies tree in place.
    */
@@ -66,9 +51,24 @@
     // Pass 1: remove security/non-rendering elements globally.
     root.querySelectorAll("script, style, noscript").forEach((el) => el.remove());
 
-    // Pass 2: images and embedded media (per project decision).
+    // Pass 2: images and embedded media.
+    // (2026-07-08, Nick) Signature logos must survive — but ONLY images that can
+    // actually render for the recipient. Outlook inline attachments (cid:) and
+    // Outlook's authenticated attachment-service URLs render as broken icons
+    // outside the mailbox, so those still get stripped; publicly hosted
+    // http(s) images and inline data: images are kept.
     if (stripImages) {
-      root.querySelectorAll("img, video, object, embed").forEach((el) => el.remove());
+      root.querySelectorAll("video, object, embed").forEach((el) => el.remove());
+      let imgKept = 0, imgStripped = 0;
+      root.querySelectorAll("img").forEach((el) => {
+        const src = (el.getAttribute("src") || "").trim();
+        const renderable =
+          /^data:image\//i.test(src) ||
+          (/^https?:\/\//i.test(src) &&
+            !/outlook\.(office|live|office365)\.|attachment\.outlook|\/service\.svc\/|ecpattachment/i.test(src));
+        if (renderable) { imgKept++; } else { el.remove(); imgStripped++; }
+      });
+      console.log(`[formatter] images: kept ${imgKept} renderable, stripped ${imgStripped} non-renderable`);
 
       // Strip image-only wrappers left behind. Outlook signatures often have
       // `<p class="MsoNormal"><span><img src="..."></span></p>` blocks. After
@@ -81,7 +81,8 @@
       //     meaningful even when empty)
       //   - `<p><span></span></p>` after image strip → remove (no content)
       const isFunctionallyEmpty = (el) => {
-        if (el.querySelector("br, hr, a[name], input")) return false;
+        // "img" here protects the wrappers of images we KEPT in Pass 2.
+        if (el.querySelector("br, hr, a[name], input, img")) return false;
         const text = el.textContent;
         if (text.length === 0) return true;
         // ASCII whitespace only counts as empty; NBSP (U+00A0) counts as content.
@@ -158,12 +159,42 @@
       }
     });
 
-    // Pass 5: ATP "EXTERNAL" banners.
-    root.querySelectorAll("span, p, div").forEach((el) => {
-      if (isExternalAtpBanner(el)) {
-        el.remove();
+    // Pass 5: security banners injected by mail defense — not part of the
+    // conversation (Nick, 2026-07-08: strip ALL the yellow warning lines).
+    // Three families, matched only when they are an element's ENTIRE text so a
+    // legit sentence that merely mentions these words is never touched:
+    //   1. "EXTERNAL" / "[EXTERNAL]" / "EXTERNAL EMAIL" (Defender ATP)
+    //   2. "CAUTION: This email originated from outside the organization…"
+    //      (gateway-appended, often stacked several deep at the thread bottom)
+    //   3. "You don't often get email from x. Learn why this is important"
+    //      (Outlook first-contact safety tip)
+    const BANNER_PATTERNS = [
+      /^\[?\s*EXTERNAL(\s+EMAIL)?\s*\]?[.!]?$/i,
+      /^CAUTION[:\s][\s\S]{0,400}outside (of )?the organization[\s\S]{0,400}$/i,
+      /^You don['’]t often get email from[\s\S]{0,200}$/i,
+    ];
+    const isSecurityBanner = (el) => {
+      const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+      if (!text || text.length > 600) return false;
+      return BANNER_PATTERNS.some((re) => re.test(text));
+    };
+    let bannersRemoved = 0;
+    root.querySelectorAll("table, p, div, span").forEach((el) => {
+      if (!el.isConnected || !isSecurityBanner(el)) return;
+      // Climb to the outermost wrapper whose entire text is still just the
+      // banner (banners usually sit in a table/div shell with bg color).
+      let target = el;
+      while (
+        target.parentElement &&
+        target.parentElement !== root &&
+        isSecurityBanner(target.parentElement)
+      ) {
+        target = target.parentElement;
       }
+      target.remove();
+      bannersRemoved++;
     });
+    console.log(`[formatter] removed ${bannersRemoved} security banner(s)`);
 
     // Pass 6: force inline `margin: 0` on every <p> and <div>. THIS is the
     // visual fix that actually works.
