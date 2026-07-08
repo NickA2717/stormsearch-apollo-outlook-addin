@@ -154,8 +154,11 @@ class ApolloClient {
     // 1. Find the queued manual email message — retry to dodge race on enrollment.
     let messageId = null;
     let queuedMessage = null;
-    for (let attempt = 0; attempt < 6 && !messageId; attempt++) {
-      if (attempt > 0) await new Promise(r => setTimeout(r, 800));
+    // 10 × 1500ms ≈ 15s window (was 6 × 800ms ≈ 5s): in the 2026-07-08 incident the
+    // drafted message still didn't exist ~5s after enrollment, which is what let the
+    // old fallback grab another contact's message.
+    for (let attempt = 0; attempt < 10 && !messageId; attempt++) {
+      if (attempt > 0) await new Promise(r => setTimeout(r, 1500));
       try {
         const search = await this._request("POST", "/emailer_messages/search", {
           contact_ids: [contactId],

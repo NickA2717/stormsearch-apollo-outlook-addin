@@ -197,8 +197,10 @@ found and fixed. Keep all three in mind — they're the failure modes most likel
    (a) hard client-side filter `m.contact_id === contactId` before any candidate selection;
    (b) removed the newest-overall fallback — only manual-email or explicit step-1 messages are
    valid PUT targets; (c) abort if `add_contact_ids` returns 200 with an empty `contacts` array
-   (silent non-enrollment — this also happened: the pushed contact was never added to the
-   sequence, which is why no drafted manual message existed); (d) keep the Outlook draft unless
+   (defensive only — Nick confirmed enrollment DID work during the incident; he removed the
+   contact manually after each failed push. The real gap: Apollo creates the drafted message
+   asynchronously and it didn't exist yet within the ~5s retry window, so the broken search +
+   fallback grabbed another contact's message); (d) keep the Outlook draft unless
    the push VERIFIED — clipboard is fragile and the draft was the only durable copy of the reply.
    **Rules:** never trust an Apollo server-side filter — always re-filter results client-side on
    the field that matters; never PUT to a message type you didn't create (automatic emails are
