@@ -162,8 +162,18 @@ class ApolloClient {
           emailer_campaign_ids: [sequenceId],
           per_page: 25,
         });
-        const messages = search.emailer_messages || search.messages || [];
-        console.log(`[apollo] search attempt ${attempt + 1}: found ${messages.length} message(s)`, messages);
+        const rawMessages = search.emailer_messages || search.messages || [];
+        // HARD GUARD (2026-07-08): Apollo's /emailer_messages/search now IGNORES the
+        // contact_ids filter and returns every message in the campaign — verified by
+        // searching with a bogus contact id and still getting other contacts' messages.
+        // Without this client-side filter the picker below can select ANOTHER contact's
+        // scheduled email and overwrite it (happened in production: one contact's thread
+        // was written onto a different contact's scheduled follow-up). Never operate on
+        // messages that don't belong to the target contact.
+        const messages = rawMessages.filter(m =>
+          String(m.contact_id || (m.contact && m.contact.id) || "") === String(contactId)
+        );
+        console.log(`[apollo] search attempt ${attempt + 1}: ${rawMessages.length} message(s) returned, ${messages.length} belong to contact ${contactId}`, messages);
 
         // Apollo can leave stale emailer_messages around from previous enrollments
         // (e.g. when a contact is added, removed, then re-added). The search returns
@@ -197,7 +207,11 @@ class ApolloClient {
           (m.emailer_step_position === 1 || m.position === 1) && liveStatus(m.status)
         ).sort(sortNewestFirst);
 
-        const candidate = manualCandidates[0] || step1Candidates[0] || messages.slice().sort(sortNewestFirst)[0];
+        // No "newest overall" last resort (removed 2026-07-08): it could select a
+        // scheduled AUTOMATIC follow-up and overwrite a template Apollo is about to
+        // send. Only a manual email or an explicit step-1 message is a valid target;
+        // otherwise fail and let the clipboard fallback handle it.
+        const candidate = manualCandidates[0] || step1Candidates[0];
 
         if (candidate) {
           queuedMessage = candidate;

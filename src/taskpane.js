@@ -404,6 +404,19 @@
       });
       console.log("[push] add response", addRes);
 
+      // Guard (2026-07-08): Apollo can return 200 with an empty contacts array when
+      // the enrollment silently no-ops (contact not actually added to the sequence).
+      // If that happens, stop here — do NOT search/PUT (the message picker would have
+      // nothing legitimate to target) and do NOT discard the Outlook draft.
+      if (Array.isArray(addRes.contacts) && addRes.contacts.length === 0) {
+        setStatus("status-area", "", null);
+        setStatus("result-area",
+          "Push failed: Apollo did not enroll the contact in the sequence (it may be finished/paused in another sequence, or blocked). Your draft is untouched — check the contact in Apollo and try again.",
+          "error");
+        $("push-btn").disabled = false;
+        return;
+      }
+
       // 2. Try to push the body into step 1's manual email message via API.
       console.log("[push] attempting body update; HTML length:", apolloHtml.length);
       const pushResult = await apollo.tryUpdateManualMessageBody({
@@ -424,8 +437,13 @@
         await copyToClipboard(apolloHtml);
         setStatus("status-area", "", null);
         setStatus("result-area",
-          `⚠ Contact added to sequence, but body push failed (${pushResult.reason}). The HTML is on your clipboard — paste it into Apollo step 1 and click Send.`,
+          `⚠ Contact added to sequence, but body push failed (${pushResult.reason}). The HTML is on your clipboard — paste it into Apollo step 1 and click Send. Your Outlook draft was kept as a backup.`,
           "warn");
+        // Keep the draft on failure (2026-07-08): the clipboard is fragile and the
+        // draft is the only durable copy of the typed reply. Only a verified push
+        // discards it.
+        $("push-btn").disabled = false;
+        return;
       }
 
       // 3. Discard the Outlook draft. Office.js close() has changed twice; try
