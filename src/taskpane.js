@@ -390,8 +390,25 @@
       return;
     }
 
+    // Host inline (cid:) images BEFORE formatting so signature logos survive:
+    // attachment bytes → image-host worker → https URLs the formatter keeps.
+    // Fail-soft: on any error this returns the body unchanged and the push
+    // proceeds exactly as before (cid images stripped).
+    let bodyForFormat = bodyToUse;
+    try {
+      if (window.InlineImageHoster) {
+        bodyForFormat = await InlineImageHoster.hostInlineImages(
+          bodyToUse,
+          Office.context.roamingSettings.get(SETTINGS_KEY),
+          Office.context.mailbox.item
+        );
+      }
+    } catch (e) {
+      console.warn("[push] inline-image hosting failed, continuing without:", e);
+    }
+
     // Format the body for Apollo.
-    const apolloHtml = ThreadFormatter.format(bodyToUse, { stripImages: true });
+    const apolloHtml = ThreadFormatter.format(bodyForFormat, { stripImages: true });
     console.log(`[push] formatted apolloHtml length: ${apolloHtml.length}; first 120 chars:`, apolloHtml.slice(0, 120));
 
     try {
