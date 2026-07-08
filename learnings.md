@@ -109,10 +109,13 @@ Apollo calls route through a Worker proxy.
 Uses browser-native `DOMParser` to walk the compose body as a tree. **Seven cleanup passes:**
 
 1. **Strip non-rendering elements:** `<script>`, `<style>`, `<noscript>`.
-2. **Strip images/media** (`<img>`, `<video>`, `<object>`, `<embed>`) — broken placeholders look worse
-   than absent images. Then iteratively remove paragraphs/divs left functionally empty (no text, no
-   `<br>`, no named anchor) to collapse the space image wrappers leave (e.g. Bench Dogs logo). NBSP
-   (U+00A0) counts as content here, so intentional `<p>&nbsp;</p>` blank lines survive.
+2. **Selective image strip** (updated 2026-07-08, Nick: preserve signature logos): KEEP `<img>` with
+   http(s) or `data:image/` src; STRIP cid:, Outlook attachment-service URLs (auth-gated, render
+   broken outside the mailbox), `<video>`/`<object>`/`<embed>`. Caveat: logos embedded as mail
+   attachments (cid:) physically can't survive — only hosted ones do. Then iteratively remove
+   paragraphs/divs left functionally empty (no text, no `<br>`, no named anchor, no kept `<img>`)
+   to collapse the space stripped-image wrappers leave. NBSP (U+00A0) counts as content here, so
+   intentional `<p>&nbsp;</p>` blank lines survive.
 3. **Collapse consecutive blank-line paragraphs:** when a blank-line element (whitespace + NBSP + `<br>`
    only) is immediately preceded by another at the same level, remove it; singletons preserved.
    Handles image-spacer pairs that lose their image in Pass 2 and leave stacked spacers. **Note the
@@ -120,8 +123,12 @@ Uses browser-native `DOMParser` to walk the compose body as a tree. **Seven clea
    as blank when collapsing redundant runs.
 4. **Strip Office namespace tags:** `<o:p>`, `<v:imagedata>`, `<w:WordSection>`, `<m:math>`,
    `<st1:place>` — don't render outside Outlook. Text content preserved as a text node.
-5. **Strip Outlook ATP "EXTERNAL" banners:** orange-bg spans/paragraphs containing only "EXTERNAL" /
-   "[EXTERNAL]" (Defender injects these on incoming external mail). Not part of the conversation.
+5. **Strip ALL security banners** (broadened 2026-07-08, Nick: "remove the yellow security lines"):
+   "EXTERNAL" / "[EXTERNAL]" / "EXTERNAL EMAIL", "CAUTION: …originated from outside the
+   organization…" (gateway lines, often stacked 4+ at thread bottom), and "You don't often get
+   email from x. Learn why this is important" (first-contact tip). Matched only when the text is
+   an element's ENTIRE content (≤600 chars), then climbs to the outermost same-text wrapper
+   (banner tables/divs) — a real sentence merely mentioning these words survives.
 6. **Force inline `margin: 0` on all `<p>`/`<div>`** — the key visual fix. Outlook emits
    `<p class="MsoNormal">` assuming Outlook's `margin:0` stylesheet; Apollo's TinyMCE doesn't ship that
    CSS so `<p>` picks up ~16px browser defaults that compound on `<p>&nbsp;</p>` spacers. Skip elements
