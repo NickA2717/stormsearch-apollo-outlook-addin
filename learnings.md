@@ -104,6 +104,29 @@ Apollo calls route through a Worker proxy.
 
 ---
 
+## Inline-image host (Cloudflare Worker, firm account) — permanent infrastructure
+
+Signature logos are cid: attachments embedded in the email; recipients of an Apollo send can't
+see them. Built 2026-07-08 (Nick: "logos must carry over"): at push time `src/inline-images.js`
+pulls each inline attachment's bytes via Office.js (`getAttachmentsAsync` +
+`getAttachmentContentAsync`, Mailbox 1.8), uploads to the image host, and rewrites `<img>` srcs
+to public https URLs BEFORE the formatter runs — so Pass 2 keeps them. Fail-soft everywhere: any
+error leaves that image as cid: (stripped, pre-feature behavior); a push never fails on an image.
+
+- Worker source `worker-images/src/index.js`; deployed at
+  `https://apollo-addin-images.jyurk.workers.dev` on the FIRM Cloudflare account
+  (44352d119e27f338ca2eda18ef410e7c) — the personal account hosting the CORS proxy has no deploy
+  credentials on this machine. KV namespace `IMG` (id 7694b26f5fb840309d679dd798ac79a7).
+- Content-addressed: key = SHA-256 of bytes → immutable URLs, automatic dedupe.
+- Upload gate: requires a VALID Apollo API key — worker calls Apollo `/v1/auth/health` and
+  requires `is_logged_in: true` (a bogus key returns 200 + `is_logged_in: false`, so check the
+  BODY, not the status). Plus image-only content-type allowlist (no SVG — script risk), 2MB cap.
+- cid→attachment matching: filename before the `@` in the cid, substring fallback, then
+  last-one-left pairing (OWA sometimes uses opaque GUID cids).
+- Deploy: `cd worker-images && ../worker/node_modules/.bin/wrangler deploy` (wrangler is a pinned
+  devDependency of `worker/`; both env token and cached OAuth on this machine target the firm
+  account).
+
 ## HTML cleanup strategy — `thread-formatter.js` (the core IP)
 
 Uses browser-native `DOMParser` to walk the compose body as a tree. **Seven cleanup passes:**
@@ -293,6 +316,9 @@ thread as-is.
   read-only path found the root cause without touching live sequences.
 - **This repo is PUBLIC — never write contact data (emails, names, bodies) into the project
   folder,** even temporarily. Recovered/pulled PII stays in Apollo or goes where Nick names.
+- **Never `git add -A` in this public repo — stage files by name.** A blanket add committed
+  browser-test debug artifacts (.playwright-mcp/) to the public repo on 2026-07-08; caught and
+  removed one commit later, but the blast radius of a blanket add here is public.
 
 ## Security
 - The Apollo API key is stored locally only (roaming settings) — never in this file, the repo, or chat.
