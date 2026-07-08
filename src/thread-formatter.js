@@ -59,16 +59,20 @@
     // http(s) images and inline data: images are kept.
     if (stripImages) {
       root.querySelectorAll("video, object, embed").forEach((el) => el.remove());
+      // Keep ONLY images we can vouch for (tightened per Codex finding 13 —
+      // arbitrary remote images include other senders' tracking pixels, which
+      // would fire false opens and leak recipient info when Apollo sends):
+      //   - our own image host (signature logos rewritten by inline-images.js)
+      //   - inline data: images (self-contained, no callback)
       let imgKept = 0, imgStripped = 0;
       root.querySelectorAll("img").forEach((el) => {
         const src = (el.getAttribute("src") || "").trim();
         const renderable =
           /^data:image\//i.test(src) ||
-          (/^https?:\/\//i.test(src) &&
-            !/outlook\.(office|live|office365)\.|attachment\.outlook|\/service\.svc\/|ecpattachment/i.test(src));
+          /^https:\/\/apollo-addin-images\.jyurk\.workers\.dev\/img\//i.test(src);
         if (renderable) { imgKept++; } else { el.remove(); imgStripped++; }
       });
-      console.log(`[formatter] images: kept ${imgKept} renderable, stripped ${imgStripped} non-renderable`);
+      console.log(`[formatter] images: kept ${imgKept} trusted, stripped ${imgStripped}`);
 
       // Strip image-only wrappers left behind. Outlook signatures often have
       // `<p class="MsoNormal"><span><img src="..."></span></p>` blocks. After
@@ -168,10 +172,13 @@
     //      (gateway-appended, often stacked several deep at the thread bottom)
     //   3. "You don't often get email from x. Learn why this is important"
     //      (Outlook first-contact safety tip)
+    // Tightened per Codex finding 14: each pattern must carry the banner's
+    // distinctive phrase, not just its opening word, so a real sentence that
+    // happens to start the same way survives.
     const BANNER_PATTERNS = [
       /^\[?\s*EXTERNAL(\s+EMAIL)?\s*\]?[.!]?$/i,
-      /^CAUTION[:\s][\s\S]{0,400}outside (of )?the organization[\s\S]{0,400}$/i,
-      /^You don['’]t often get email from[\s\S]{0,200}$/i,
+      /^CAUTION[:\s][\s\S]{0,80}originated from outside (of )?the organization[\s\S]{0,400}$/i,
+      /^You don['’]t often get email from[\s\S]{0,120}Learn why this is important\.?$/i,
     ];
     const isSecurityBanner = (el) => {
       const text = (el.textContent || "").replace(/\s+/g, " ").trim();

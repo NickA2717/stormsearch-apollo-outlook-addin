@@ -410,11 +410,16 @@
     let bodyForFormat = bodyToUse;
     try {
       if (window.InlineImageHoster) {
-        bodyForFormat = await InlineImageHoster.hostInlineImages(
-          bodyToUse,
-          Office.context.roamingSettings.get(SETTINGS_KEY),
-          Office.context.mailbox.item
-        );
+        // Hard 25s ceiling on the whole image stage — a hung call must never
+        // stall the push (fail-soft: images drop, push proceeds).
+        bodyForFormat = await Promise.race([
+          InlineImageHoster.hostInlineImages(
+            bodyToUse,
+            Office.context.roamingSettings.get(SETTINGS_KEY),
+            Office.context.mailbox.item
+          ),
+          new Promise((res) => setTimeout(() => res(bodyToUse), 25000)),
+        ]);
       }
     } catch (e) {
       console.warn("[push] inline-image hosting failed, continuing without:", e);
