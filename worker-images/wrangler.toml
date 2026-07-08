@@ -1,0 +1,13 @@
+name = "apollo-addin-images"
+main = "src/index.js"
+compatibility_date = "2026-07-08"
+# Firm Cloudflare account (jyurk) — the personal account that hosts the CORS
+# proxy has no deploy credentials on this machine; several other Storm workers
+# already live on the firm account.
+account_id = "44352d119e27f338ca2eda18ef410e7c"
+
+# KV namespace holding the hosted signature images (content-addressed by
+# SHA-256, immutable). Created with: wrangler kv namespace create IMG
+[[kv_namespaces]]
+binding = "IMG"
+id = "7694b26f5fb840309d679dd798ac79a7"
