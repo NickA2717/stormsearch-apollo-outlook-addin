@@ -189,6 +189,21 @@ found and fixed. Keep all three in mind — they're the failure modes most likel
    A freshly-enrolled step 1 has `current body length: 63` (empty template). The filter uses the real
    values plus the older guesses for forward-compat, and includes `unscheduled` defensively.
 
+4. **(2026-07-08) Apollo silently dropped the `contact_ids` filter on `/emailer_messages/search`.**
+   The search returned EVERY message in the campaign regardless of contact (verified: a bogus
+   contact id still returned other contacts' messages). Combined with the old "newest overall"
+   fallback, a push for contact A overwrote contact B's SCHEDULED automatic follow-up (body +
+   subject) — a wrong email queued to a real prospect. **Fixes shipped (commit 88e53e2):**
+   (a) hard client-side filter `m.contact_id === contactId` before any candidate selection;
+   (b) removed the newest-overall fallback — only manual-email or explicit step-1 messages are
+   valid PUT targets; (c) abort if `add_contact_ids` returns 200 with an empty `contacts` array
+   (silent non-enrollment — this also happened: the pushed contact was never added to the
+   sequence, which is why no drafted manual message existed); (d) keep the Outlook draft unless
+   the push VERIFIED — clipboard is fragile and the draft was the only durable copy of the reply.
+   **Rules:** never trust an Apollo server-side filter — always re-filter results client-side on
+   the field that matters; never PUT to a message type you didn't create (automatic emails are
+   Apollo's, not ours); never destroy the source (draft) unless the destination is verified.
+
 **Diagnostic that surfaces all of the above:** the log line
 `[apollo] picked message id=... status=... type=... (N manual candidate(s) of M total)`. If a future
 Apollo change breaks the filter, Nick pastes that line and we update the strings.
@@ -253,6 +268,13 @@ thread as-is.
   his portion in the clean template (see HTML style above).
 
 ---
+
+## Debugging rules (2026-07-08 session)
+- **Reproduce read-only first.** Diagnose from Apollo's real production records (message search,
+  campaign contacts, message GETs) before reaching for a write-based test enrollment — the
+  read-only path found the root cause without touching live sequences.
+- **This repo is PUBLIC — never write contact data (emails, names, bodies) into the project
+  folder,** even temporarily. Recovered/pulled PII stays in Apollo or goes where Nick names.
 
 ## Security
 - The Apollo API key is stored locally only (roaming settings) — never in this file, the repo, or chat.
