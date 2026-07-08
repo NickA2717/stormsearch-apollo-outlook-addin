@@ -197,7 +197,8 @@
         .then(([subject, to, bodyHtml]) => {
           const recipientEmail = (to && to[0] && to[0].emailAddress) || "";
           const recipientName = (to && to[0] && to[0].displayName) || "";
-          resolve({ subject, recipientEmail, recipientName, bodyHtml });
+          const recipientCount = (to || []).length;
+          resolve({ subject, recipientEmail, recipientName, recipientCount, bodyHtml });
         })
         .catch(reject);
     });
@@ -361,31 +362,43 @@
     setStatus("result-area", "", null);
     setStatus("status-area", "Pushing to Apollo…", "info");
 
-    // Read body fresh AND keep the cached one. Pick whichever has more content.
-    // - Fresh wins when Nick typed after pane-load (the original bug).
-    // - Cached wins if the fresh re-read returns empty or stripped content
-    //   (some Office.js / Outlook combos misbehave on second-read in compose).
-    let freshBodyHtml = "";
+    // Re-read recipient, subject, AND body together at click time (Codex
+    // findings 5+6). The pane-load snapshot drove contact selection; if the
+    // draft changed since — different recipient, extra recipients — pushing
+    // would target the WRONG Apollo contact. Fresh read only: the old
+    // "longer body wins" cached-fallback could push stale content and then
+    // destroy newer typed edits with the draft discard.
+    let fresh;
     try {
-      freshBodyHtml = await new Promise((res, rej) =>
-        Office.context.mailbox.item.body.getAsync(
-          Office.CoercionType.Html,
-          (r) => r.status === Office.AsyncResultStatus.Succeeded ? res(r.value) : rej(r.error)
-        )
-      );
+      fresh = await readDraft();
     } catch (e) {
-      console.warn("[push] fresh body re-read failed:", e);
+      setStatus("status-area", "", null);
+      setStatus("result-area", "Push failed: couldn't re-read the draft from Outlook. Nothing was sent; your draft is untouched.", "error");
+      $("push-btn").disabled = false;
+      return;
     }
-    const cachedBody = (draftContext && draftContext.bodyHtml) || "";
-    const freshLen = (freshBodyHtml || "").length;
-    const cachedLen = cachedBody.length;
-    console.log(`[push] body sources — cached: ${cachedLen} chars, fresh: ${freshLen} chars`);
-    const bodyToUse = freshLen > cachedLen ? freshBodyHtml : cachedBody;
-    console.log(`[push] using ${freshLen > cachedLen ? "fresh" : "cached"} body, length: ${bodyToUse.length}`);
+    if (fresh.recipientCount !== 1) {
+      setStatus("status-area", "", null);
+      setStatus("result-area", `Push blocked: the draft has ${fresh.recipientCount || 0} recipients — an Apollo push targets exactly one contact. Fix the To line and try again.`, "error");
+      $("push-btn").disabled = false;
+      return;
+    }
+    if (
+      (fresh.recipientEmail || "").toLowerCase() !==
+      (draftContext.recipientEmail || "").toLowerCase()
+    ) {
+      setStatus("status-area", "", null);
+      setStatus("result-area", "Push blocked: the recipient changed after this pane loaded, so the selected Apollo contact no longer matches. Close and reopen the pane to re-match.", "error");
+      $("push-btn").disabled = false;
+      return;
+    }
+    const bodyToUse = fresh.bodyHtml || "";
+    draftContext = fresh;
+    console.log(`[push] click-time re-read: recipients=1, body ${bodyToUse.length} chars`);
 
     if (!bodyToUse) {
       setStatus("status-area", "", null);
-      setStatus("result-area", "Push failed: couldn't read draft body from Outlook.", "error");
+      setStatus("result-area", "Push failed: the draft body read back empty from Outlook. Nothing was sent; your draft is untouched.", "error");
       $("push-btn").disabled = false;
       return;
     }
@@ -412,6 +425,15 @@
     console.log(`[push] formatted apolloHtml length: ${apolloHtml.length}; first 120 chars:`, apolloHtml.slice(0, 120));
 
     try {
+      // 0. Snapshot the contact's existing messages in this sequence BEFORE
+      //    enrolling — the picker will only accept a message created by THIS
+      //    push, excluding orphans from earlier remove/re-enroll cycles.
+      const preexistingIds = await apollo.listContactMessageIds({
+        contactId: selectedContact.id,
+        sequenceId,
+      });
+      console.log(`[push] pre-enrollment snapshot: ok=${preexistingIds.ok}, ${preexistingIds.ids.size} existing message id(s)`);
+
       // 1. Add contact to sequence.
       console.log("[push] adding contact to sequence", { sequenceId, contactId: selectedContact.id, mailboxId });
       const addRes = await apollo.addContactToSequence({
@@ -419,20 +441,29 @@
         contactId: selectedContact.id,
         mailboxId,
       });
-      console.log("[push] add response", addRes);
 
-      // Guard (2026-07-08): Apollo can return 200 with an empty contacts array when
-      // the enrollment silently no-ops (contact not actually added to the sequence).
-      // If that happens, stop here — do NOT search/PUT (the message picker would have
-      // nothing legitimate to target) and do NOT discard the Outlook draft.
-      if (Array.isArray(addRes.contacts) && addRes.contacts.length === 0) {
+      // Guard (hardened per Codex finding 3): require POSITIVE confirmation
+      // that Apollo enrolled OUR contact — a response without a matching
+      // contact entry (missing key, empty array, different contact) is a
+      // failure, not a maybe. Nothing gets searched, written, or discarded.
+      const enrolled = (Array.isArray(addRes.contacts) ? addRes.contacts : []).find(
+        (c) => c && String(c.id) === String(selectedContact.id)
+      );
+      if (!enrolled) {
+        console.warn("[push] enrollment not confirmed; contacts in response:", (addRes.contacts || []).length);
         setStatus("status-area", "", null);
         setStatus("result-area",
-          "Push failed: Apollo did not enroll the contact in the sequence (it may be finished/paused in another sequence, or blocked). Your draft is untouched — check the contact in Apollo and try again.",
+          "Push failed: Apollo did not confirm enrolling this contact in the sequence (it may be finished/paused in another sequence, or blocked). Your draft is untouched — check the contact in Apollo and try again.",
           "error");
         $("push-btn").disabled = false;
         return;
       }
+      // When Apollo tells us the enrolled contact's current step, pass it to
+      // the picker as the authoritative step identity.
+      const statuses = enrolled.contact_campaign_statuses || [];
+      const thisCampaign = statuses.find((s) => String(s.emailer_campaign_id) === String(sequenceId));
+      const currentStepId = (thisCampaign && thisCampaign.current_step_id) || null;
+      console.log(`[push] enrollment confirmed; current_step_id=${currentStepId || "n/a"}`);
 
       // 2. Try to push the body into step 1's manual email message via API.
       console.log("[push] attempting body update; HTML length:", apolloHtml.length);
@@ -441,8 +472,10 @@
         sequenceId,
         htmlBody: apolloHtml,
         subject: draftContext.subject,
+        preexistingIds,
+        currentStepId,
       });
-      console.log("[push] body update result:", pushResult);
+      console.log("[push] body update result:", pushResult.success ? "success" : pushResult.reason);
 
       if (pushResult.success) {
         setStatus("status-area", "", null);
@@ -463,21 +496,38 @@
         return;
       }
 
-      // 3. Discard the Outlook draft. Office.js close() has changed twice; try
-      //    the modern signature first, then legacy, then bare close. New Outlook
-      //    for Mac sometimes ignores discardItem and saves the draft anyway, so
-      //    we additionally clear the body to a marker so any persisted draft is
-      //    obviously a leftover.
+      // 3. Discard the Outlook draft — but FIRST prove it hasn't changed since
+      //    the content we just pushed (Codex finding 6: the user can keep
+      //    typing during the retry window; destroying those edits loses them).
       try {
         const item = Office.context.mailbox.item;
+        let latestBody = null;
+        try {
+          latestBody = await new Promise((res, rej) =>
+            item.body.getAsync(Office.CoercionType.Html, (r) =>
+              r.status === Office.AsyncResultStatus.Succeeded ? res(r.value) : rej(r.error)
+            )
+          );
+        } catch (_) {}
+        if (latestBody !== null && latestBody !== bodyToUse) {
+          console.warn(`[push] draft changed during push (${bodyToUse.length} → ${latestBody.length} chars) — keeping the draft`);
+          setStatus("result-area",
+            "✓ Pushed to Apollo — but the draft changed while the push ran, so it was KEPT (your newest edits are only in Outlook, not in Apollo).",
+            "warn");
+          $("push-btn").disabled = false;
+          return;
+        }
+
         // Replace body with a marker BEFORE closing — if Outlook saves anyway,
         // the persisted draft will be empty/marked rather than a duplicate of
-        // what we just pushed.
+        // what we just pushed. Await it so the close can't race the write.
         try {
-          item.body.setAsync(
-            "[Pushed to Apollo — safe to delete this draft]",
-            { coercionType: Office.CoercionType.Text },
-            () => {}
+          await new Promise((res) =>
+            item.body.setAsync(
+              "[Pushed to Apollo — safe to delete this draft]",
+              { coercionType: Office.CoercionType.Text },
+              () => res()
+            )
           );
         } catch (_) {}
 
