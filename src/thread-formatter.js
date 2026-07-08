@@ -36,7 +36,7 @@
   "use strict";
 
   // Version stamp — confirm in console which formatter the iframe loaded.
-  console.log("[formatter] thread-formatter.js v=20260708c loaded");
+  console.log("[formatter] thread-formatter.js v=20260708d loaded");
 
   const STORM_FONT_STYLE =
     "font-family: Calibri, Tahoma, sans-serif; font-size: 12pt; color: rgb(0, 0, 0);";
@@ -287,6 +287,46 @@
     console.log(
       `[formatter] font normalize: ${fontFamilyStripped} font-family stripped, ${fontSizeNormalized} font-sizes 10-12pt collapsed to 12pt, ${fontFaceCleaned} <font face> attr(s) cleaned`
     );
+
+    // Pass 8: repair literal markdown links (2026-07-08, seen in production).
+    // Outlook on the web's compose editor (same engine as new Outlook for Mac)
+    // sometimes serializes links in the body as literal markdown —
+    // "[www.example.com](https://www.example.com)" — either bare in a span or
+    // as the display text INSIDE a real <a>. Recipients would see the brackets.
+    //   - inside an <a>: keep the anchor, replace the markdown with its label
+    //   - bare in text: rebuild a real <a href="url">label</a>
+    const MD_LINK_RE = /\[([^\[\]]{1,300}?)\]\((https?:\/\/[^()\s]+)\)/g;
+    let mdLinksFixed = 0;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const mdNodes = [];
+    while (walker.nextNode()) {
+      if (MD_LINK_RE.test(walker.currentNode.nodeValue)) mdNodes.push(walker.currentNode);
+      MD_LINK_RE.lastIndex = 0;
+    }
+    mdNodes.forEach((node) => {
+      const insideAnchor = !!(node.parentElement && node.parentElement.closest("a"));
+      if (insideAnchor) {
+        node.nodeValue = node.nodeValue.replace(MD_LINK_RE, (_, label) => { mdLinksFixed++; return label; });
+        return;
+      }
+      const frag = document.createDocumentFragment();
+      let last = 0;
+      const text = node.nodeValue;
+      let m;
+      MD_LINK_RE.lastIndex = 0;
+      while ((m = MD_LINK_RE.exec(text))) {
+        if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+        const a = document.createElement("a");
+        a.setAttribute("href", m[2]);
+        a.textContent = m[1];
+        frag.appendChild(a);
+        last = m.index + m[0].length;
+        mdLinksFixed++;
+      }
+      if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+      node.parentNode.replaceChild(frag, node);
+    });
+    console.log(`[formatter] repaired ${mdLinksFixed} literal markdown link(s)`);
   }
 
   /**
