@@ -19,6 +19,8 @@ An Outlook add-in that pushes a typed email reply into an Apollo sequence's manu
 
 Each project carries its own `learnings.md` — read it at the start of a run, append new lessons at the end. On top of that, three habits run every session.
 
+**Step 0 — read the Master Map before building anything (2026-07-12).** Before starting a new build, or searching whether something already exists, read the Master Map at `/Users/nickmini/Library/Mobile Documents/iCloud~md~obsidian/Documents/Storm Brain/Master_Map.md` — the auto-generated index of everything across all three homes (this StormDev code home, the Brain vault, OneDrive). Purpose: never rebuild something that already exists. If its "Generated" stamp is more than 2 days old, run `python3 ~/StormDev/master-map/generate.py`.
+
 **Record proactively — don't ask first (Nick, 2026-07-06).** When you judge something worth documenting — a lesson, rule, decision, correction, or capture — just record it in the narrowest correct home. Do NOT ask "want me to record this?" or wait for approval. Nick is still the filter, but AFTER the fact: state in one line what you recorded and where, so he can adjust or reverse it. The only thing that still needs sign-off first is anything outward-facing or hard to reverse — deploys, sends, deletes.
 
 **Flag defects, don't launder them (2026-07-09).** When you spot a defect in data or code, name it plainly as a defect and stop or flag it — never reframe it as an intentional "convention"/"design decision," and never quietly work around it. A downgraded defect ships as fact, which is worse than missing it. (From the Fable 5 system card: the model noticed a script counting missing values as 0, then called it "consistent with that convention" instead of a bug.)
