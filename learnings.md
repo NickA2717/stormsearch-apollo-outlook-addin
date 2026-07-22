@@ -275,9 +275,68 @@ found and fixed. Keep all three in mind — they're the failure modes most likel
 `[apollo] picked message id=... status=... type=... (N manual candidate(s) of M total)`. If a future
 Apollo change breaks the filter, Nick pastes that line and we update the strings.
 
-**Operational note:** removing a test contact does NOT delete its emailer_messages — they pile up
-orphaned. Harmless thanks to the newest-wins picker; if pile-up ever causes trouble, an Apollo support
-ask or admin sweep can clear them.
+**Operational note (corrected 2026-07-22):** removing a contact from a sequence DELETES their
+still-drafted emailer_messages (verified live twice: Patrick's failed-push draft was gone after
+removal, and the CLAUDE TEST sequence showed 0 messages after cleanup). Completed/sent messages
+survive. Consequence: a failed push that the user "fixes" by removing + re-adding the contact
+destroys the forensic evidence — diagnose BEFORE removing.
+
+---
+
+## 2026-07-22 reliability overhaul (live as v=20260722a) — "green success but nothing in Apollo"
+
+Nick reported every push showing success while the thread + reply never appeared in Apollo. The
+failing push itself was unobservable (he removed + re-added the contact, which deleted the drafted
+message — see corrected operational note above), so instead of pinning one path, every class that
+could produce success-without-body was engineered out and the whole flow was verified live against
+the CLAUDE TEST sequence by running the REAL `src/apollo.js` in Node through the real proxy.
+
+**False-success classes closed:**
+1. **Marker-only verify.** The old verify only required the invisible `<!--sapw-->` marker — a
+   near-empty body (Outlook read glitch or formatter over-strip) verified green with no content.
+   Now: a CONTENT FLOOR before any Apollo write (raw text ≥20 chars; formatted text ≥40 chars AND
+   ≥30% of raw), and `putBodyDurable` verification also requires real text in the fetched body.
+2. **Late overwrite race.** Apollo renders a fresh message's template asynchronously; a body
+   written early could be silently overwritten AFTER a clean verify. Now: stability re-checks at
+   ~+3s and ~+8s after each PUT, auto re-PUT if the marker vanished (max 3 PUTs); success is only
+   declared after a verify that survives the stability window.
+3. **Pane death mid-push.** Closing the reply window mid-push killed the flow silently (contact
+   enrolled, step 1 empty, no error). Now: a localStorage push journal is written BEFORE any
+   Apollo write; the next pane open auto-completes any interrupted push (`resumeUnfinishedPush`),
+   refusing to clobber a draft that already has real content without our marker. Plus a
+   `beforeunload` warning while a push is in flight.
+4. **Stale cached code.** Old reply windows run old iframe-cached code indefinitely. Now: the pane
+   fetches `taskpane.html` from Pages on load and warns loudly when its BUILD stamp is behind.
+
+**Real defects fixed alongside:**
+- **Already-enrolled dead end (reproduced live).** `add_contact_ids` returns `contacts: []` when
+  the contact is already ACTIVE in that sequence; the old code hard-errored, forcing Nick's
+  remove-and-redo dance. Now: on unconfirmed enrollment, `GET /v1/contacts/{id}` tells us the
+  status in THIS sequence — active/paused → mode "existing" reuses the existing drafted step-1
+  manual email (verified live: same message id, body replaced); finished → precise remedy message;
+  none → real enrollment failure.
+- **Draft-search window 15s → 60s** with live progress text (Apollo creates the message
+  asynchronously; 15s was still a guess). `message_not_found` after a fresh enrollment stays
+  PENDING in the journal so the resume pass finishes it when the draft appears late.
+- **Spurious "draft changed — kept."** Consecutive Outlook body reads can differ cosmetically;
+  the pre-discard comparison now compares stripped text, not raw HTML.
+
+**API facts confirmed live (don't re-research):**
+- Remove endpoint: `POST /v1/emailer_campaigns/remove_or_stop_contact_ids` with
+  `{contact_ids, emailer_campaign_ids, mode}` — campaign ids in the BODY. The per-campaign path
+  variant (`/emailer_campaigns/{id}/remove_or_stop_contact_ids`) 404s.
+- `GET /v1/contacts/{id}` works and returns `contact_campaign_statuses` (status values seen:
+  `active`, `finished`).
+- Markers do NOT survive an Apollo send — completed messages carry no `<!--sapw-->`, so sent
+  messages can't be forensically attributed to the add-in.
+- A verified body is durable at rest: test bodies held ≥30s, Nick's real push held ≥75 min.
+
+**Testing pattern that worked (reuse it):** run the shipped `src/apollo.js` unmodified in Node
+(`window` shim + `eval`) against the real proxy and the CLAUDE TEST sequence + the
+`reengage-test-20260706@stormrecruit.com` contact (id `6a4c0f97bd0f2b0018778ec5`), asserting on
+real Apollo state, then remove the contact (which also deletes the drafted messages). Gotcha:
+Cloudflare on the personal proxy account 403s non-browser User-Agents — test harnesses must send
+a browser UA (same bot-block class as the storm-heartbeat-monitor ping gotcha).
 
 ---
 
