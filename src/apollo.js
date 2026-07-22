@@ -165,57 +165,60 @@ class ApolloClient {
   }
 
   /**
-   * Best-effort: try to update the body of a queued emailer_message (the manual
-   * email task created when a contact is added to step 1). If the API rejects
-   * or the verification fetch shows the body didn't actually change, the caller
-   * should fall back to clipboard copy.
-   *
-   * Apollo's add_contact_ids creates the queued message asynchronously, so we
-   * retry the search a few times if no message is found yet.
+   * Fetch one contact by id — includes contact_campaign_statuses, used to
+   * explain a rejected enrollment (already active vs finished in the sequence).
    */
-  async tryUpdateManualMessageBody({ contactId, sequenceId, htmlBody, subject, preexistingIds, currentStepId }) {
-    // 1. Find the queued manual email message — retry to dodge race on enrollment.
-    let messageId = null;
-    let queuedMessage = null;
-    // 10 × 1500ms ≈ 15s window (was 6 × 800ms ≈ 5s): in the 2026-07-08 incident the
-    // drafted message still didn't exist ~5s after enrollment, which is what let the
-    // old fallback grab another contact's message.
-    for (let attempt = 0; attempt < 10 && !messageId; attempt++) {
-      if (attempt > 0) await new Promise(r => setTimeout(r, 1500));
+  async getContact(contactId) {
+    const data = await this._request("GET", `/contacts/${contactId}`);
+    return data.contact || data;
+  }
+
+  /**
+   * Poll for the PUT-able drafted manual email for this contact+sequence.
+   *
+   * mode "new"      — only accept a message NOT in the pre-enrollment snapshot
+   *                   (created by THIS push). Snapshot-failed fallback: created
+   *                   within the last 10 minutes.
+   * mode "existing" — accept any drafted manual message for this contact in
+   *                   this sequence. Used when Apollo says the contact is
+   *                   already enrolled (re-push onto the existing step-1 draft)
+   *                   and when resuming an interrupted push.
+   *
+   * Polls up to maxWaitMs (Apollo creates the message asynchronously — the
+   * 2026-07-08 incident proved it can take longer than 5s; the old 15s ceiling
+   * was still a guess, so this is now generous and caller-visible via
+   * onProgress(elapsedSeconds)).
+   */
+  async findManualDraft({ contactId, sequenceId, mode, preexistingIds, currentStepId, maxWaitMs, onProgress }) {
+    const deadline = Date.now() + (maxWaitMs || 60000);
+    const started = Date.now();
+    let delay = 1000;
+    for (let attempt = 1; ; attempt++) {
       try {
         const search = await this._request("POST", "/emailer_messages/search", {
           contact_ids: [contactId],
           emailer_campaign_ids: [sequenceId],
-          per_page: 25,
+          per_page: 50,
         });
         const rawMessages = search.emailer_messages || search.messages || [];
-        // HARD GUARD (2026-07-08): Apollo's /emailer_messages/search now IGNORES the
-        // contact_ids filter and returns every message in the campaign — verified by
-        // searching with a bogus contact id and still getting other contacts' messages.
-        // Without this client-side filter the picker below can select ANOTHER contact's
-        // scheduled email and overwrite it (happened in production: one contact's thread
-        // was written onto a different contact's scheduled follow-up). Never operate on
-        // messages that don't belong to the target contact.
+        // HARD GUARD (2026-07-08): Apollo's /emailer_messages/search IGNORES the
+        // contact_ids filter and returns every message in the campaign — verified
+        // by searching with a bogus contact id and still getting other contacts'
+        // messages. Without this client-side filter the picker can select ANOTHER
+        // contact's scheduled email and overwrite it (happened in production).
+        // Never operate on messages that don't belong to the target contact.
         const messages = rawMessages.filter(m =>
           String(m.contact_id || (m.contact && m.contact.id) || "") === String(contactId)
         );
-        console.log(`[apollo] search attempt ${attempt + 1}: ${rawMessages.length} returned, ${messages.length} for target contact`);
+        console.log(`[apollo] search attempt ${attempt}: ${rawMessages.length} returned, ${messages.length} for target contact`);
 
         // Candidate requirements (Codex review 2026-07-08, findings 1+2) —
         // every one must hold; any uncertainty means NO candidate:
-        //  a. campaign matches, when the message carries the field (the server-
-        //     side campaign filter held in testing, but don't trust it alone);
-        //  b. NOT in the pre-enrollment snapshot — the message must have been
-        //     created by THIS push, so orphans from earlier remove/re-enroll
-        //     cycles are excluded by id. If the snapshot itself failed, fall
-        //     back to requiring created_at within the last 10 minutes;
-        //  c. positively a manual email (type contains "manual" — an automatic
-        //     email can never qualify; the old any-type step-1 fallback that
-        //     contradicted this is DELETED);
-        //  d. a drafted/live status ("drafted" confirmed in production; older
-        //     guesses kept for forward-compat);
-        //  e. when Apollo's enrollment response told us the current step id,
-        //     prefer the message on that exact step.
+        //  a. campaign matches, when the message carries the field;
+        //  b. mode "new": NOT in the pre-enrollment snapshot;
+        //  c. positively a manual email (an automatic email can never qualify);
+        //  d. a drafted/live status ("drafted" confirmed in production);
+        //  e. prefer the enrollment response's current step id when we have it.
         const liveStatus = (s) =>
           s === "drafted" || s === "queued" || s === "pending" || s === "draft" ||
           s === "unscheduled" || !s;
@@ -228,11 +231,11 @@ class ApolloClient {
           return !c || String(c) === String(sequenceId);
         };
         const isNewThisPush = (m) => {
+          if (mode === "existing") return true;
           if (preexistingIds && preexistingIds.ok) return !preexistingIds.ids.has(m.id);
           const created = Date.parse(m.created_at || m.createdAt || "");
           return Number.isFinite(created) && Date.now() - created < 10 * 60 * 1000;
         };
-
         const sortNewestFirst = (a, b) => {
           const aT = a.created_at || a.createdAt || a.id || "";
           const bT = b.created_at || b.createdAt || b.id || "";
@@ -246,64 +249,130 @@ class ApolloClient {
           ? candidates.filter(m => String(m.emailer_step_id || "") === String(currentStepId))
           : [];
         const candidate = stepMatched[0] || candidates[0];
-
         if (candidate) {
-          queuedMessage = candidate;
-          messageId = candidate.id;
           console.log(`[apollo] picked message id=${candidate.id} status=${candidate.status} type=${candidate.type || candidate.emailer_step_type} stepMatch=${stepMatched.length > 0} (${candidates.length} qualifying candidate(s) of ${messages.length})`);
+          return candidate;
         }
       } catch (e) {
-        console.warn(`[apollo] search failed on attempt ${attempt + 1}:`, e);
+        console.warn(`[apollo] search failed on attempt ${attempt}:`, e);
       }
+      if (Date.now() + delay > deadline) return null;
+      if (onProgress) onProgress(Math.round((Date.now() - started) / 1000));
+      await new Promise(r => setTimeout(r, delay));
+      delay = Math.min(delay + 500, 3000);
     }
+  }
 
-    if (!messageId) {
-      console.warn("[apollo] no queued emailer_message found after retries");
-      return { success: false, reason: "message_not_found" };
-    }
-
-    console.log(`[apollo] target message id: ${messageId}, current body length: ${(queuedMessage.body_html || "").length}`);
-
-    // 2. PUT the new body, stamped with a unique per-push marker (an HTML
-    //    comment — invisible to recipients). The old verification matched the
-    //    first ~20 chars, which are the SAME wrapper on every formatted push,
-    //    so it could false-pass against a previous body (Codex finding 4).
+  /**
+   * PUT the body and prove it STAYS there.
+   *
+   * The old flow verified once, immediately after the PUT — but Apollo renders
+   * the step template into a freshly created message ASYNCHRONOUSLY, so a body
+   * written too early can be silently overwritten right after a clean verify.
+   * That yields the worst outcome: a success banner with nothing in Apollo.
+   *
+   * This version verifies immediately, then RE-verifies after ~3s and ~8s.
+   * If the marker vanished at any check, the body is re-PUT (up to 3 PUTs
+   * total). Success is only declared after a verify that survives the last
+   * stability window.
+   *
+   * Verification requires, on the re-fetched message: the unique per-push
+   * marker, the right contact, real text content (not just the marker — a
+   * near-empty push must never read as success), and the subject we set.
+   */
+  async putBodyDurable({ messageId, contactId, htmlBody, subject, onProgress }) {
     const pushToken = `sapw-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     const markedBody = `<!--${pushToken}-->${htmlBody}`;
-    try {
+    const textLen = (h) => String(h || "")
+      .replace(/<!--[\s\S]*?-->/g, "")
+      .replace(/<[^>]*>/g, " ")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim().length;
+    const expectedTextLen = textLen(htmlBody);
+
+    const doPut = async () => {
       const body = { body_html: markedBody };
       if (subject) body.subject = subject;
       await this._request("PUT", `/emailer_messages/${messageId}`, body);
       console.log(`[apollo] PUT accepted for message ${messageId}`);
-    } catch (e) {
-      console.error("[apollo] PUT rejected:", e);
-      return { success: false, reason: "put_rejected", error: String(e) };
-    }
-
-    // 3. Verify: re-fetch and require the unique marker, the right contact,
-    //    and (when we set it) the right subject. A failed verification is a
-    //    FAILURE — never optimism (the old code claimed success when the
-    //    verify GET errored, which could reach draft destruction).
-    try {
+    };
+    const check = async () => {
       const verify = await this._request("GET", `/emailer_messages/${messageId}`);
       const got = verify.emailer_message || verify;
+      const gotBody = got.body_html || "";
       const gotContact = got.contact_id || (got.contact && got.contact.id) || "";
-      console.log(`[apollo] verify: bodylen=${(got.body_html || "").length} markerPresent=${(got.body_html || "").includes(pushToken)} contactMatch=${!gotContact || String(gotContact) === String(contactId)}`);
-      if (!got.body_html || !got.body_html.includes(pushToken)) {
-        return { success: false, reason: "verify_mismatch", messageId };
-      }
-      if (gotContact && String(gotContact) !== String(contactId)) {
-        return { success: false, reason: "verify_wrong_contact", messageId };
-      }
-      if (subject && got.subject && got.subject !== subject) {
-        return { success: false, reason: "verify_subject_mismatch", messageId };
-      }
-    } catch (e) {
-      console.warn("[apollo] verify GET failed — treating as FAILURE:", e);
-      return { success: false, reason: "verify_unavailable", messageId };
-    }
+      const marker = gotBody.includes(pushToken);
+      console.log(`[apollo] verify: bodylen=${gotBody.length} markerPresent=${marker} contactMatch=${!gotContact || String(gotContact) === String(contactId)}`);
+      if (gotContact && String(gotContact) !== String(contactId)) return { ok: false, fatal: "verify_wrong_contact" };
+      if (!marker) return { ok: false };
+      // Content floor: the pushed text must actually be there. Guards against
+      // a formatter/Outlook glitch producing a marker-only body that the old
+      // marker-only verify waved through as green success.
+      if (expectedTextLen >= 40 && textLen(gotBody) < Math.min(40, expectedTextLen)) return { ok: false };
+      if (subject && got.subject && got.subject !== subject) return { ok: false, fatal: "verify_subject_mismatch" };
+      return { ok: true };
+    };
 
-    return { success: true, messageId };
+    for (let putAttempt = 1; putAttempt <= 3; putAttempt++) {
+      try {
+        await doPut();
+      } catch (e) {
+        console.error("[apollo] PUT rejected:", e);
+        return { success: false, reason: "put_rejected", error: String(e), messageId };
+      }
+      let stable = true;
+      // Immediate check, then stability re-checks at ~+3s and ~+8s.
+      for (const wait of [0, 3000, 5000]) {
+        if (wait) {
+          if (onProgress) onProgress("confirming it sticks…");
+          await new Promise(r => setTimeout(r, wait));
+        }
+        let res;
+        try {
+          res = await check();
+        } catch (e) {
+          // A failed verification is a FAILURE — never optimism (the pre-2026-07-08
+          // code claimed success when the verify GET errored).
+          console.warn("[apollo] verify GET failed — treating as FAILURE:", e);
+          return { success: false, reason: "verify_unavailable", messageId };
+        }
+        if (res.fatal) return { success: false, reason: res.fatal, messageId };
+        if (!res.ok) {
+          console.warn(`[apollo] body did not hold (PUT attempt ${putAttempt}) — Apollo overwrote or dropped it; re-pushing`);
+          stable = false;
+          break;
+        }
+      }
+      if (stable) return { success: true, messageId, putAttempts: putAttempt };
+    }
+    return { success: false, reason: "verify_mismatch", messageId };
+  }
+
+  /**
+   * Orchestrator kept for the task pane: locate the drafted manual email
+   * (mode "new" after a fresh enrollment, "existing" for re-push/resume),
+   * then durably write and verify the body.
+   */
+  async tryUpdateManualMessageBody({ contactId, sequenceId, htmlBody, subject, preexistingIds, currentStepId, mode, maxWaitMs, onProgress }) {
+    const target = await this.findManualDraft({
+      contactId, sequenceId,
+      mode: mode || "new",
+      preexistingIds, currentStepId,
+      maxWaitMs: maxWaitMs || 60000,
+      onProgress: onProgress
+        ? (sec) => onProgress(`waiting for Apollo to create the draft (${sec}s)… keep this window open`)
+        : null,
+    });
+    if (!target) {
+      console.warn("[apollo] no queued emailer_message found after retries");
+      return { success: false, reason: "message_not_found" };
+    }
+    console.log(`[apollo] target message id: ${target.id}, current body length: ${(target.body_html || "").length}`);
+    return this.putBodyDurable({
+      messageId: target.id, contactId, htmlBody, subject,
+      onProgress: onProgress || null,
+    });
   }
 }
 

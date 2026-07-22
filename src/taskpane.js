@@ -23,11 +23,56 @@
   "use strict";
 
   const SETTINGS_KEY = "apolloApiKey";
+  const BUILD = "20260722a";     // must match the ?v= stamp in taskpane.html
   let apollo = null;            // ApolloClient instance once we have a key
   let draftContext = null;       // {to, subject, bodyHtml}
   let selectedContact = null;    // The contact picked / matched
   let cachedMailboxes = [];
   let cachedSequences = [];
+  let pushInFlight = false;
+
+  // Closing the reply window mid-push kills the whole flow silently — the
+  // contact ends up enrolled with an empty step 1 and no error ever shown.
+  window.addEventListener("beforeunload", (e) => {
+    if (pushInFlight) { e.preventDefault(); e.returnValue = "A push to Apollo is still running."; }
+  });
+
+  /* ------------------------ Push journal (localStorage) ------------------------
+   * Every push is recorded before any Apollo write and updated at each stage.
+   * Two jobs: (1) if a push is interrupted (window closed, network died), the
+   * next pane open finishes it automatically; (2) a durable diagnostic trail. */
+  const JOURNAL_KEY = "sapw_push_journal_v1";
+  function journalAll() {
+    try { return JSON.parse(localStorage.getItem(JOURNAL_KEY)) || []; } catch (_) { return []; }
+  }
+  function journalSave(list) {
+    try { localStorage.setItem(JOURNAL_KEY, JSON.stringify(list.slice(-12))); } catch (_) {}
+  }
+  function journalStart(entry) {
+    entry.id = "j" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    entry.ts = Date.now();
+    entry.stage = "started";
+    const list = journalAll();
+    list.push(entry);
+    journalSave(list);
+    return entry.id;
+  }
+  function journalUpdate(id, patch) {
+    const list = journalAll();
+    const e = list.find(x => x.id === id);
+    if (e) { Object.assign(e, patch); journalSave(list); }
+  }
+
+  // Visible text length of an HTML string (tags, comments, nbsp stripped).
+  function textLenOfHtml(html) {
+    return String(html || "")
+      .replace(/<!--[\s\S]*?-->/g, "")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]*>/g, " ")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim().length;
+  }
 
   /* ------------------------ DOM helpers ------------------------ */
   const $ = (id) => document.getElementById(id);
@@ -74,7 +119,73 @@
     }
     apollo = new ApolloClient(apiKey);
     showMain();
+    checkVersion();          // fire-and-forget: warns if this iframe cached old code
     await loadEverything();
+    resumeUnfinishedPush();  // fire-and-forget: completes any interrupted push
+  }
+
+  /* Office iframes cache aggressively; an old reply window can run stale code
+   * long after a fix shipped. Compare our BUILD stamp against what GitHub
+   * Pages currently serves and warn loudly on mismatch. */
+  async function checkVersion() {
+    try {
+      const res = await fetch("taskpane.html?nocache=" + Date.now(), { cache: "no-store" });
+      const txt = await res.text();
+      const m = txt.match(/taskpane\.js\?v=([0-9a-z]+)/);
+      if (m && m[1] !== BUILD) {
+        setStatus("version-area",
+          `This window is running an OLD copy of the add-in (${BUILD}; latest is ${m[1]}). Close this reply window, open a fresh one, and push from there.`,
+          "warn");
+      }
+    } catch (_) { /* offline check is best-effort */ }
+  }
+
+  /* If a previous push was interrupted after enrolling the contact but before
+   * the body landed (window closed, network drop), finish it now: find the
+   * still-drafted step-1 manual email and write the journaled body into it.
+   * Never overwrites a draft that already has real content without our marker
+   * — that would clobber something Nick typed in Apollo by hand. */
+  async function resumeUnfinishedPush() {
+    try {
+      const list = journalAll();
+      const now = Date.now();
+      const pending = list.filter(e =>
+        e.stage !== "done" && e.stage !== "failed" &&
+        e.html && e.contactId && e.sequenceId &&
+        now - e.ts > 45 * 1000 && now - e.ts < 48 * 3600 * 1000
+      );
+      if (!pending.length) return;
+      const e = pending[pending.length - 1];
+      // Anything older we can't safely finish — mark closed so it stops resurfacing.
+      pending.slice(0, -1).forEach(p => journalUpdate(p.id, { stage: "failed", result: "superseded" }));
+
+      setStatus("version-area", `An earlier push (${e.contactName || "contact"}) was interrupted — finishing it now…`, "info");
+      const target = await apollo.findManualDraft({
+        contactId: e.contactId, sequenceId: e.sequenceId, mode: "existing", maxWaitMs: 10000,
+      });
+      if (!target) {
+        journalUpdate(e.id, { stage: "failed", result: "resume_no_draft" });
+        setStatus("version-area", `Heads up: your push to ${e.contactName || "a contact"} at ${new Date(e.ts).toLocaleString()} never finished, and no editable step-1 draft exists for them anymore. Re-do that one push.`, "warn");
+        return;
+      }
+      const existingBody = target.body_html || "";
+      if (textLenOfHtml(existingBody) >= 40 && existingBody.indexOf("sapw-") === -1) {
+        journalUpdate(e.id, { stage: "done", result: "already_filled_manually" });
+        setStatus("version-area", `An earlier push (${e.contactName || "contact"}) was interrupted, but their Apollo step-1 draft already has content — it was left untouched. Double-check it before sending.`, "warn");
+        return;
+      }
+      const res = await apollo.putBodyDurable({
+        messageId: target.id, contactId: e.contactId, htmlBody: e.html, subject: e.subject,
+      });
+      journalUpdate(e.id, { stage: res.success ? "done" : "failed", result: res.success ? "resumed" : res.reason });
+      setStatus("version-area",
+        res.success
+          ? `✓ Finished your interrupted push to ${e.contactName || "contact"} — their step-1 draft in Apollo is now filled and verified.`
+          : `Could not finish the interrupted push to ${e.contactName || "contact"} (${res.reason}). Re-do that one push.`,
+        res.success ? "success" : "warn");
+    } catch (err) {
+      console.warn("[resume] failed:", err);
+    }
   }
 
   /* ------------------------ Settings ------------------------ */
@@ -431,6 +542,40 @@
     // accident before (Codex finding 16).
     console.log(`[push] formatted apolloHtml length: ${apolloHtml.length}`);
 
+    // CONTENT FLOOR (2026-07-22): a push whose body carries no real text must
+    // never proceed. Before this check, an Outlook body-read glitch or a
+    // formatter over-strip could push a near-empty email; the verify only
+    // matched the invisible marker, so the pane showed GREEN SUCCESS while
+    // Apollo held nothing — exactly the "everything pushed except my email"
+    // failure. Block it here, loudly, with the draft untouched.
+    const rawTextLen = textLenOfHtml(bodyToUse);
+    const formattedTextLen = textLenOfHtml(apolloHtml);
+    console.log(`[push] text lengths: raw=${rawTextLen} formatted=${formattedTextLen}`);
+    if (rawTextLen < 20) {
+      setStatus("status-area", "", null);
+      setStatus("result-area", "Push blocked: Outlook returned a nearly empty draft body. Nothing was sent; your draft is untouched. Click into the message text, then push again (or close this reply window and open a fresh one).", "error");
+      $("push-btn").disabled = false;
+      return;
+    }
+    if (formattedTextLen < 40 || formattedTextLen < rawTextLen * 0.3) {
+      setStatus("status-area", "", null);
+      setStatus("result-area", `Push blocked: formatting reduced the email from ${rawTextLen} to ${formattedTextLen} characters of text, so a blank email would have reached Apollo. Nothing was sent; your draft is untouched. Close this reply window, open a fresh one, and try again.`, "error");
+      $("push-btn").disabled = false;
+      return;
+    }
+
+    // Journal the push BEFORE any Apollo write — if this window dies mid-push,
+    // the next pane open finishes the job from this record.
+    const journalId = journalStart({
+      contactId: selectedContact.id,
+      contactName: selectedContact.name || "",
+      sequenceId,
+      mailboxId,
+      subject: draftContext.subject || "",
+      html: apolloHtml.length <= 300000 ? apolloHtml : "",
+    });
+    pushInFlight = true;
+
     try {
       // 0. Snapshot the contact's existing messages in this sequence BEFORE
       //    enrolling — the picker will only accept a message created by THIS
@@ -451,28 +596,65 @@
 
       // Guard (hardened per Codex finding 3): require POSITIVE confirmation
       // that Apollo enrolled OUR contact — a response without a matching
-      // contact entry (missing key, empty array, different contact) is a
-      // failure, not a maybe. Nothing gets searched, written, or discarded.
+      // contact entry is never treated as enrolled.
       const enrolled = (Array.isArray(addRes.contacts) ? addRes.contacts : []).find(
         (c) => c && String(c.id) === String(selectedContact.id)
       );
-      if (!enrolled) {
-        console.warn("[push] enrollment not confirmed; contacts in response:", (addRes.contacts || []).length);
-        setStatus("status-area", "", null);
-        setStatus("result-area",
-          "Push failed: Apollo did not confirm enrolling this contact in the sequence (it may be finished/paused in another sequence, or blocked). Your draft is untouched — check the contact in Apollo and try again.",
-          "error");
-        $("push-btn").disabled = false;
-        return;
-      }
-      // When Apollo tells us the enrolled contact's current step, pass it to
-      // the picker as the authoritative step identity.
-      const statuses = enrolled.contact_campaign_statuses || [];
-      const thisCampaign = statuses.find((s) => String(s.emailer_campaign_id) === String(sequenceId));
-      const currentStepId = (thisCampaign && thisCampaign.current_step_id) || null;
-      console.log(`[push] enrollment confirmed; current_step_id=${currentStepId || "n/a"}`);
 
-      // 2. Try to push the body into step 1's manual email message via API.
+      // Mode "new" = fresh enrollment this push; "existing" = the contact was
+      // already in this sequence, so update their existing step-1 draft
+      // instead of dead-ending (2026-07-22: an already-enrolled contact used
+      // to hard-fail here, forcing the remove-and-redo dance).
+      let mode = "new";
+      let currentStepId = null;
+      if (enrolled) {
+        const statuses = enrolled.contact_campaign_statuses || [];
+        const thisCampaign = statuses.find((s) => String(s.emailer_campaign_id) === String(sequenceId));
+        currentStepId = (thisCampaign && thisCampaign.current_step_id) || null;
+        console.log(`[push] enrollment confirmed; current_step_id=${currentStepId || "n/a"}`);
+        journalUpdate(journalId, { stage: "enrolled" });
+      } else {
+        console.warn("[push] enrollment not confirmed; contacts in response:", (addRes.contacts || []).length);
+        // Why did Apollo refuse? Ask for the contact's status in THIS sequence.
+        let seqStatus = "unknown";
+        try {
+          const c = await apollo.getContact(selectedContact.id);
+          const st = (c.contact_campaign_statuses || []).find(
+            (s) => String(s.emailer_campaign_id) === String(sequenceId)
+          );
+          seqStatus = st ? (st.status || "unknown") : "none";
+          if (st && st.current_step_id) currentStepId = st.current_step_id;
+        } catch (e) {
+          console.warn("[push] contact status lookup failed:", e);
+        }
+        console.log(`[push] contact status in this sequence: ${seqStatus}`);
+        if (seqStatus === "active" || seqStatus === "paused") {
+          mode = "existing";
+          journalUpdate(journalId, { stage: "enrolled", note: "already_in_sequence" });
+          setStatus("status-area", "Contact is already in this sequence — updating their existing step-1 draft…", "info");
+        } else if (seqStatus === "finished") {
+          journalUpdate(journalId, { stage: "failed", result: "finished_in_sequence" });
+          pushInFlight = false;
+          setStatus("status-area", "", null);
+          setStatus("result-area",
+            "Push blocked: this contact already FINISHED this sequence once, and Apollo will not re-add them from here. In Apollo, remove them from the sequence (find the contact inside the sequence → Remove), then push again. Your draft is untouched.",
+            "error");
+          $("push-btn").disabled = false;
+          return;
+        } else {
+          journalUpdate(journalId, { stage: "failed", result: "enroll_not_confirmed" });
+          pushInFlight = false;
+          setStatus("status-area", "", null);
+          setStatus("result-area",
+            "Push failed: Apollo did not enroll this contact in the sequence (they may be unsubscribed, blocked, or missing an email there). Your draft is untouched — check the contact in Apollo and try again.",
+            "error");
+          $("push-btn").disabled = false;
+          return;
+        }
+      }
+
+      // 2. Push the body into the step-1 manual email and PROVE it stuck
+      //    (immediate verify + stability re-checks, auto re-push on revert).
       console.log("[push] attempting body update; HTML length:", apolloHtml.length);
       const pushResult = await apollo.tryUpdateManualMessageBody({
         contactId: selectedContact.id,
@@ -481,21 +663,44 @@
         subject: draftContext.subject,
         preexistingIds,
         currentStepId,
+        mode,
+        maxWaitMs: 60000,
+        onProgress: (msg) => setStatus("status-area", "Pushing to Apollo — " + msg, "info"),
       });
       console.log("[push] body update result:", pushResult.success ? "success" : pushResult.reason);
+      // message_not_found after a fresh enrollment stays PENDING in the journal:
+      // Apollo may create the draft minutes later, and the resume pass on the
+      // next pane open will then fill it automatically.
+      journalUpdate(journalId, {
+        stage: pushResult.success ? "done"
+          : (pushResult.reason === "message_not_found" && mode === "new") ? "enrolled"
+          : "failed",
+        result: pushResult.success ? "verified" : pushResult.reason,
+        messageId: pushResult.messageId || "",
+      });
 
       if (pushResult.success) {
+        pushInFlight = false;
         setStatus("status-area", "", null);
         setStatus("result-area",
-          "✓ Pushed to Apollo. Step 1's body is pre-filled — go to Apollo and click Send.",
+          (mode === "existing"
+            ? "✓ Contact was already in this sequence — its step-1 draft was replaced and verified. Go to Apollo and click Send."
+            : "✓ Pushed to Apollo and verified (checked three times over ~10 seconds). Step 1 is pre-filled — go to Apollo and click Send.")
+          + (pushResult.putAttempts > 1 ? ` (Apollo tried to overwrite it ${pushResult.putAttempts - 1}x; we re-pushed until it held.)` : ""),
           "success");
       } else {
+        pushInFlight = false;
         // Fallback: clipboard. Tell the user WHY so we can debug — and be
         // honest about whether the copy actually worked (Codex cleanup item).
         const copied = await copyToClipboard(apolloHtml);
+        const why = pushResult.reason === "message_not_found"
+          ? (mode === "existing"
+            ? "the contact is already PAST step 1 in this sequence (no editable step-1 draft exists)"
+            : "Apollo never created the step-1 draft, even after a full minute")
+          : `body push failed (${pushResult.reason})`;
         setStatus("status-area", "", null);
         setStatus("result-area",
-          `⚠ Contact added to sequence, but body push failed (${pushResult.reason}). ${copied ? "The HTML is on your clipboard — paste it into Apollo step 1 and click Send." : "Clipboard copy ALSO failed — your Outlook draft is the only copy; re-push or copy it manually."} Your Outlook draft was kept as a backup.`,
+          `⚠ Contact is in the sequence, but ${why}. ${copied ? "The email HTML is on your clipboard — paste it into Apollo step 1 and click Send." : "Clipboard copy ALSO failed — your Outlook draft is the only copy; re-push or copy it manually."} Your Outlook draft was kept as a backup. If you push again from this window, it will finish the job automatically.`,
           "warn");
         // Keep the draft on failure (2026-07-08): the clipboard is fragile and the
         // draft is the only durable copy of the typed reply. Only a verified push
@@ -517,8 +722,17 @@
             )
           );
         } catch (_) {}
-        if (latestBody !== null && latestBody !== bodyToUse) {
-          console.warn(`[push] draft changed during push (${bodyToUse.length} → ${latestBody.length} chars) — keeping the draft`);
+        // Compare TEXT, not raw HTML: consecutive Outlook body reads can differ
+        // cosmetically (re-serialized ids/attributes) with identical content,
+        // which used to spuriously keep the draft after a clean push.
+        const textNorm = (h) => String(h || "")
+          .replace(/<!--[\s\S]*?-->/g, "")
+          .replace(/<[^>]*>/g, " ")
+          .replace(/&nbsp;/gi, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (latestBody !== null && textNorm(latestBody) !== textNorm(bodyToUse)) {
+          console.warn(`[push] draft text changed during push (${bodyToUse.length} → ${latestBody.length} chars) — keeping the draft`);
           setStatus("result-area",
             "✓ Pushed to Apollo — but the draft changed while the push ran, so it was KEPT (your newest edits are only in Outlook, not in Apollo).",
             "warn");
@@ -557,8 +771,10 @@
         }
       } catch (_) {}
     } catch (err) {
+      pushInFlight = false;
+      journalUpdate(journalId, { stage: "failed", result: "exception: " + (err && err.message) });
       setStatus("status-area", "", null);
-      setStatus("result-area", "Push failed: " + err.message, "error");
+      setStatus("result-area", "Push failed: " + err.message + " — your draft is untouched. Push again from this window; it picks up where it left off.", "error");
       $("push-btn").disabled = false;
     }
   }
