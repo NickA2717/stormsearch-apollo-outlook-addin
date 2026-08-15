@@ -1,0 +1,425 @@
+# stormsearch-apollo-outlook-addin — learnings archive (COLD — read the relevant section before that kind of work)
+
+Created 2026-08-14 by the fleet memory-budget Stage-3 migration.
+
+---
+
+# learnings.md hot-file migration — 2026-08-14
+
+The entire pre-migration learnings.md (27,862 B) is preserved VERBATIM below.
+
+---
+title: Storm Search Apollo Outlook Add-in — Learnings
+type: learning
+project-kind: code
+status: active
+updated: 2026-06-28
+tags: [learning, project, apollo, outlook, addin]
+related:
+  - "[[Storm Search Apollo Outlook Add-in]]"
+  - "[[+ Code Projects]]"
+---
+
+# Storm Search × Apollo × Outlook Add-in — Project Memory
+
+> **Purpose:** the reusable context + gotchas for this project — what the runtime can't hold.
+> Setup/architecture/endpoints are in `README.md`; "what happened" is in the session logs.
+> Status: **built and working** (end-to-end pushes are reliable). One open item: draft persistence.
+
+> **Consolidated 2026-06-28** (StormDev learnings pass): cut the conversation journey, the
+> build-phases checklist, the dated Test-Status diary, the live cache-bust version (the code carries
+> it + `taskpane.html` explains the bump rule), and the stale `*CLAUDE CODE - WORK*` memory pointers.
+> Promoted: key-leak rule → README. Payload below is the technical findings + design decisions.
+
+---
+
+## What it does (goal)
+
+Collapses Nick's old 7+ step manual paste workflow into 2 clicks in Outlook + 1 in Apollo: type a
+reply in Outlook → click **Push to Apollo** → the add-in looks up the contact, enrolls them in a chosen
+sequence, pushes the typed reply + formatted HTML thread into step 1 (Manual email), and discards the
+Outlook draft. Nick hops to Apollo and clicks Send on step 1; Apollo runs steps 2–3 automatically.
+
+---
+
+## Critical technical findings (do NOT re-research)
+
+### Apollo threading limitations — confirmed
+- Apollo's "Reply" step type can ONLY thread to a Message-ID Apollo itself sent. It CANNOT thread to
+  externally-sent (Outlook) emails — no public API knob, no add-in setting, no manual override.
+- The Apollo Chrome Extension "follow-up sequence" feature is the only native path to true
+  `In-Reply-To` threading, and it's **Gmail-only** — not available in Outlook.
+- **Soft threading is the accepted answer.** Email clients visually group by `Re:` subject
+  normalization even without `In-Reply-To`. So the add-in's job is to AUTOMATE the manual paste
+  workflow, not invent threading.
+
+### Step 1 MUST be a "Manual email" — the HTML constraint
+- Apollo custom fields store plain text; when plugged into a template body via `{{custom_field}}`, HTML
+  tags are escaped (render as literal `<div>`). Snippets/templates support HTML but are global, not
+  per-contact. **The only way to get a per-contact HTML body is a "Manual email" step.**
+- Body push works via the API: `POST /v1/emailer_campaigns/{id}/add_contact_ids` enrolls, then
+  `PUT /v1/emailer_messages/{id}` sets the body (verified by post-PUT GET). **Fallback if PUT ever
+  fails:** add-in copies HTML to clipboard, Nick pastes in Apollo manually.
+
+### Key Apollo account details
+| What | Value |
+|---|---|
+| User ID | `65728046753a5c021b66c1cc` |
+| Default sender mailbox / ID | `nicka@stormrecruit.com` / `66254b6ec24bd301c7b44e44` |
+| Test sequence (CLAUDE TEST) ID | `69eca35c338653001948481d` |
+| — step 1 (manual email, new thread) | `69eca35c338653001948481e` |
+| — step 2 (auto, reply to thread, 78h wait) | `69eca35c338653001948482f` |
+| — step 3 (auto, reply to thread, 101h wait) | `69eca35c3386530019484832` |
+| Sequence auto-finish on reply | `mark_finished_if_reply: true` |
+| Same-account reply delay | 30 days |
+
+Nick has many sender mailboxes (~50+ Nick-prefixed, across burner domains like `stormsearch-eng.com`,
+`stormsearch-mfg.com`); he picks sender per push for now.
+
+---
+
+## Design decisions & preferences
+
+- **Sequence dropdown** lists ACTIVE sequences only (`active: true`). **Sender mailbox** picked per push.
+- **Contact lookup** is a dropdown with name + title + company + last activity to verify, even on a
+  single match. Auto-create if no match — popup asks first.
+- **Step 1 type** = Manual email (automatic doesn't support a per-contact body).
+- **Outlook draft after push** = auto-discard (see open item below — unreliable on new Outlook for Mac).
+- **API key storage** = local only via `Office.context.roamingSettings`, never in code/repo/chat.
+- **Hosting** = GitHub Pages on `NickA2717`; new Outlook for Mac + web both supported; Nick has M365
+  admin and sideloads when instructed.
+
+### Office.js APIs used (not in README)
+- `item.body.getAsync()` (read draft), `item.to/.subject.getAsync()`, `item.itemId` (thread context),
+  `item.close({discardItem:true})` (discard), `roamingSettings.get/set('apolloApiKey')`.
+
+---
+
+## CORS proxy (Cloudflare Worker) — permanent infrastructure
+
+Apollo's API only sends `Access-Control-Allow-Origin` for its own Chrome extension and Salesforce.
+Browser fetches from anywhere else (our github.io origin, Office iframes) fail at preflight — so all
+Apollo calls route through a Worker proxy.
+
+- Source `worker/src/index.js`; config `worker/wrangler.toml`.
+- Cloudflare account `e66e78179c050c20a8e3844aa669089a` (n.alioto7@yahoo.com); subdomain
+  `n-alioto7.workers.dev`. URL: `https://stormsearch-apollo-proxy.n-alioto7.workers.dev`.
+- `/health` returns `{ok:true,target:"https://api.apollo.io",time:...}`.
+- Origin allowlist: `nicka2717.github.io`, `outlook.office.com`, `outlook.cloud.microsoft`, + Office
+  365 iframe hosts.
+- **Deploy gotcha:** wrangler can't build from paths containing asterisks (esbuild reads `*` as a glob).
+  The old `*CLAUDE CODE - WORK*` folder broke it; workaround was copying `worker/` to a clean path
+  (e.g. `/tmp/sapw`) before `wrangler deploy`. The project now lives at
+  `~/StormDev/stormsearch-apollo-outlook-addin` (no asterisks), but keep the lesson for any starred path.
+
+---
+
+## Inline-image host (Cloudflare Worker, firm account) — permanent infrastructure
+
+Signature logos are cid: attachments embedded in the email; recipients of an Apollo send can't
+see them. Built 2026-07-08 (Nick: "logos must carry over"): at push time `src/inline-images.js`
+pulls each inline attachment's bytes via Office.js (`getAttachmentsAsync` +
+`getAttachmentContentAsync`, Mailbox 1.8), uploads to the image host, and rewrites `<img>` srcs
+to public https URLs BEFORE the formatter runs — so Pass 2 keeps them. Fail-soft everywhere: any
+error leaves that image as cid: (stripped, pre-feature behavior); a push never fails on an image.
+
+- Worker source `worker-images/src/index.js`; deployed at
+  `https://apollo-addin-images.jyurk.workers.dev` on the FIRM Cloudflare account
+  (44352d119e27f338ca2eda18ef410e7c) — the personal account hosting the CORS proxy has no deploy
+  credentials on this machine. KV namespace `IMG` (id 7694b26f5fb840309d679dd798ac79a7).
+- Content-addressed: key = SHA-256 of bytes → immutable URLs, automatic dedupe.
+- Upload gate: requires a VALID Apollo API key — worker calls Apollo `/v1/auth/health` and
+  requires `is_logged_in: true` (a bogus key returns 200 + `is_logged_in: false`, so check the
+  BODY, not the status). Plus image-only content-type allowlist (no SVG — script risk), 2MB cap.
+- cid→attachment matching: filename before the `@` in the cid, substring fallback, then
+  last-one-left pairing (OWA sometimes uses opaque GUID cids).
+- Deploy: `cd worker-images && ../worker/node_modules/.bin/wrangler deploy` (wrangler is a pinned
+  devDependency of `worker/`; both env token and cached OAuth on this machine target the firm
+  account).
+
+## HTML cleanup strategy — `thread-formatter.js` (the core IP)
+
+Uses browser-native `DOMParser` to walk the compose body as a tree. **Seven cleanup passes:**
+
+1. **Strip non-rendering elements:** `<script>`, `<style>`, `<noscript>`.
+2. **Selective image strip** (updated 2026-07-08, Nick: preserve signature logos): KEEP `<img>` with
+   http(s) or `data:image/` src; STRIP cid:, Outlook attachment-service URLs (auth-gated, render
+   broken outside the mailbox), `<video>`/`<object>`/`<embed>`. Caveat: logos embedded as mail
+   attachments (cid:) physically can't survive — only hosted ones do. Then iteratively remove
+   paragraphs/divs left functionally empty (no text, no `<br>`, no named anchor, no kept `<img>`)
+   to collapse the space stripped-image wrappers leave. NBSP (U+00A0) counts as content here, so
+   intentional `<p>&nbsp;</p>` blank lines survive.
+3. **Collapse consecutive blank-line paragraphs:** when a blank-line element (whitespace + NBSP + `<br>`
+   only) is immediately preceded by another at the same level, remove it; singletons preserved.
+   Handles image-spacer pairs that lose their image in Pass 2 and leave stacked spacers. **Note the
+   different NBSP semantics:** Pass 2 treats NBSP as content (keeps `<p>&nbsp;</p>`); Pass 3 treats it
+   as blank when collapsing redundant runs.
+4. **Strip Office namespace tags:** `<o:p>`, `<v:imagedata>`, `<w:WordSection>`, `<m:math>`,
+   `<st1:place>` — don't render outside Outlook. Text content preserved as a text node.
+5. **Strip ALL security banners** (broadened 2026-07-08, Nick: "remove the yellow security lines"):
+   "EXTERNAL" / "[EXTERNAL]" / "EXTERNAL EMAIL", "CAUTION: …originated from outside the
+   organization…" (gateway lines, often stacked 4+ at thread bottom), and "You don't often get
+   email from x. Learn why this is important" (first-contact tip). Matched only when the text is
+   an element's ENTIRE content (≤600 chars), then climbs to the outermost same-text wrapper
+   (banner tables/divs) — a real sentence merely mentioning these words survives.
+6. **Force inline `margin: 0` on all `<p>`/`<div>`** — the key visual fix. Outlook emits
+   `<p class="MsoNormal">` assuming Outlook's `margin:0` stylesheet; Apollo's TinyMCE doesn't ship that
+   CSS so `<p>` picks up ~16px browser defaults that compound on `<p>&nbsp;</p>` spacers. Skip elements
+   with an explicit margin (e.g. `margin-bottom:12pt` on the From-block) so Outlook's deliberate margins
+   stay.
+7. **Normalize font-family + collapse main-body font-sizes:**
+   - **(a)** Strip every `font-family` from descendant inline styles + the legacy `face` attr from
+     `<font>` tags, so the outer wrapper's `Calibri, Tahoma, sans-serif` cascades uniformly.
+   - **(b)** Normalize each `font-size` in the **10pt–12pt range to 12pt**. Sizes <10pt (8pt
+     confidentiality, 9pt banners) are PRESERVED so fine print stays fine print; >12pt preserved
+     (probable headlines).
+   - **Why bounded:** Outlook defaults to 11/12pt and quote blocks slip in 10pt → typed reply rendered
+     12pt while quoted bodies rendered 11pt. The bounded range unifies main body at 12pt while keeping
+     hierarchy markers distinct. An earlier "everything to 12pt" experiment blew up 8pt/9pt fine print
+     and Nick rejected it ("absolutely horrendous") — that's why Pass 7 strips font-family but only
+     *bounds* font-size.
+
+8. **Repair literal markdown links** (2026-07-08, seen in Nick's production push): Outlook on the
+   web's compose editor (new Outlook for Mac uses the same engine) sometimes serializes links as
+   literal `[text](url)` — bare in a span OR as the display text inside a real `<a>` (even
+   safelinks-wrapped ones). Recipients would see the brackets. Bare ones become real anchors;
+   inside an anchor the markdown collapses to just the label.
+
+Then wrap the cleaned body in a default `Calibri, Tahoma, 12pt` block. Inner `font-size` declarations
+still win over the wrapper's 12pt — deliberate.
+
+**Rollback (if Pass 7 misbehaves):** `src/thread-formatter-v1.js` is a frozen pre-Pass-7 snapshot. In
+`src/taskpane.html`, change the `thread-formatter.js?v=...` script tag to `thread-formatter-v1.js?v=...`,
+bump the cache-bust letter on all three script tags, commit/push, wait ~30–60s for Pages, hard-refresh
+the task pane. Console logs `[formatter] thread-formatter-v1.js (...) loaded`. Do NOT edit the v1 file —
+it's frozen by design. (The bump rule is also a comment at `taskpane.html` line ~70.)
+
+---
+
+## Apollo editor quirks (lessons learned)
+
+- **Apollo's editor is TinyMCE-based**, `forced_root_block: 'p'` by default → top-level `<div>` get
+  rewritten to `<p>` on load. Converting `<p>`→`<div>` in our formatter doesn't stick (Apollo undoes
+  it). **Inline styles like `margin:0` DO survive the round-trip** — that's the pattern that works.
+- **CORS via the Cloudflare proxy is non-negotiable** (see proxy section).
+- **Apollo creates emailer_messages asynchronously** after `add_contact_ids` — search-then-PUT must
+  retry to dodge the race (currently up to 4 attempts, 600ms backoff).
+- **Verify body push after PUT:** GET the message and confirm `body_html` matches — catches silent
+  server-side failures (happened once in testing).
+- **Cache-busting matters:** Office Add-in iframes cache aggressively. Append `?v=YYYYMMDDx` to all
+  script/CSS URLs from `taskpane.html` + emit `<meta http-equiv="Cache-Control" content="no-store,...">`.
+  Bump the version letter on every code change. (Live code is already version-stamped; the bump is
+  routine, not tracked here.)
+
+---
+
+## Body-push reliability — three bugs that bit (all fixed in `apollo.js` / `taskpane.js`)
+
+The push was unreliable ("more times than not it doesn't carry over") until three independent bugs were
+found and fixed. Keep all three in mind — they're the failure modes most likely to recur.
+
+1. **Body read at pane-load instead of click time.** `draftContext.bodyHtml` was captured during
+   `loadEverything()` at pane-open, so Nick's reply (typed AFTER) never made the push. **Fix
+   (`handlePush`):** read body fresh via `item.body.getAsync(CoercionType.Html, ...)` AND keep the
+   cached one; pick whichever has more content (some Office.js/Outlook combos returned empty on
+   second-read, so cached wins as fallback). Logs both lengths.
+2. **PUT to a stale orphan message.** `/emailer_messages/search` filtered by
+   `contact_ids + emailer_campaign_ids` returns ALL messages ever created for that contact in that
+   sequence — including stale ones from prior add/remove/re-add cycles (exactly Nick's test flow). PUT
+   + verify both succeed but Apollo's UI shows old content because we wrote the wrong message (one test
+   returned **5 messages** for a 3-step, 1-contact sequence). **Fix (`tryUpdateManualMessageBody`):**
+   filter to manual_email + non-terminal status, sort `created_at` desc (ObjectId lex fallback — Mongo
+   ObjectIds encode timestamp in the first 8 hex chars), pick the newest.
+3. **Wrong field-value guesses in the filter.** Confirmed from production logs (NOT inferred): `type` =
+   `"outreach_manual_email"` (not `"manual_email"`), `status` = `"drafted"` (not queued/pending/draft).
+   A freshly-enrolled step 1 has `current body length: 63` (empty template). The filter uses the real
+   values plus the older guesses for forward-compat, and includes `unscheduled` defensively.
+
+4. **(2026-07-08) Apollo silently dropped the `contact_ids` filter on `/emailer_messages/search`.**
+   The search returned EVERY message in the campaign regardless of contact (verified: a bogus
+   contact id still returned other contacts' messages). Combined with the old "newest overall"
+   fallback, a push for contact A overwrote contact B's SCHEDULED automatic follow-up (body +
+   subject) — a wrong email queued to a real prospect. **Fixes shipped (commit 88e53e2):**
+   (a) hard client-side filter `m.contact_id === contactId` before any candidate selection;
+   (b) removed the newest-overall fallback — only manual-email or explicit step-1 messages are
+   valid PUT targets; (c) abort if `add_contact_ids` returns 200 with an empty `contacts` array
+   (defensive only — Nick confirmed enrollment DID work during the incident; he removed the
+   contact manually after each failed push. The real gap: Apollo creates the drafted message
+   asynchronously and it didn't exist yet within the ~5s retry window, so the broken search +
+   fallback grabbed another contact's message); (d) keep the Outlook draft unless
+   the push VERIFIED — clipboard is fragile and the draft was the only durable copy of the reply.
+   **Rules:** never trust an Apollo server-side filter — always re-filter results client-side on
+   the field that matters; never PUT to a message type you didn't create (automatic emails are
+   Apollo's, not ours); never destroy the source (draft) unless the destination is verified.
+
+5. **(2026-07-08, Codex review — the full hardening pass, live as v=20260708f.)** An independent
+   Codex review (filed in the Brain: `Code Reviews/(2026-07-08) - Apollo_Outlook_Addin_Codex_Review.md`)
+   found the contact filter alone still left wrong-target paths. Now enforced:
+   - **Enrollment-bound targeting:** pre-enrollment message-id snapshot → the picker only accepts a
+     message CREATED BY THIS PUSH (snapshot-fail fallback: created <10 min ago), campaign re-checked
+     client-side, positively manual type + drafted status required, the enrollment response's
+     `current_step_id` preferred, and the any-type step-1 fallback is GONE.
+   - **Real verification:** every PUT is stamped with a unique HTML-comment marker
+     (`<!--sapw-…-->`); verify requires marker + contact + subject; a failed verify GET is a
+     FAILURE (the old code claimed success — and the old 20-char prefix check matched the shared
+     wrapper on EVERY push, so it could false-pass).
+   - **Enrollment guard:** positive confirmation our contact is in the add response; anything
+     uncertain stops before any search/write.
+   - **Draft safety:** recipient/subject/body re-read together at CLICK time (pane-load snapshot
+     drove contact selection — a recipient change would push to the old contact); exactly one
+     recipient required and it must still match; fresh-body-only (the "longer body wins" cached
+     fallback could push stale content); pre-discard re-read keeps the draft if it changed
+     mid-push; the marker `setAsync` is awaited before close.
+   - **Image host hardened:** key gate bound to the firm's Apollo `team_id` (worker secret
+     `FIRM_TEAM_ID`) — any other Apollo customer's valid key is rejected; RANDOM public keys
+     (content hash only for internal dedupe — hash URLs were computable by anyone with the bytes);
+     magic-byte validation; nosniff + CSP sandbox; early Content-Length reject; 500/day quota;
+     1-year KV retention.
+   - **Formatter:** kept images restricted to OUR image host + `data:` — arbitrary remote images
+     carried other senders' tracking pixels that would fire false opens on Apollo sends. Logos
+     still carry (cid logos are rewritten to our host before formatting).
+   - Deliberately open: Apollo key still in roamingSettings (Microsoft says don't — parked for a
+     proxy-held-key design pass); public git history not purged (Nick declined, accepted).
+
+**Diagnostic that surfaces all of the above:** the log line
+`[apollo] picked message id=... status=... type=... (N manual candidate(s) of M total)`. If a future
+Apollo change breaks the filter, Nick pastes that line and we update the strings.
+
+**Operational note (corrected 2026-07-22):** removing a contact from a sequence DELETES their
+still-drafted emailer_messages (verified live twice: Patrick's failed-push draft was gone after
+removal, and the CLAUDE TEST sequence showed 0 messages after cleanup). Completed/sent messages
+survive. Consequence: a failed push that the user "fixes" by removing + re-adding the contact
+destroys the forensic evidence — diagnose BEFORE removing.
+
+---
+
+## 2026-07-22 reliability overhaul (live as v=20260722a) — "green success but nothing in Apollo"
+
+Nick reported every push showing success while the thread + reply never appeared in Apollo. The
+failing push itself was unobservable (he removed + re-added the contact, which deleted the drafted
+message — see corrected operational note above), so instead of pinning one path, every class that
+could produce success-without-body was engineered out and the whole flow was verified live against
+the CLAUDE TEST sequence by running the REAL `src/apollo.js` in Node through the real proxy.
+
+**False-success classes closed:**
+1. **Marker-only verify.** The old verify only required the invisible `<!--sapw-->` marker — a
+   near-empty body (Outlook read glitch or formatter over-strip) verified green with no content.
+   Now: a CONTENT FLOOR before any Apollo write (raw text ≥20 chars; formatted text ≥40 chars AND
+   ≥30% of raw), and `putBodyDurable` verification also requires real text in the fetched body.
+2. **Late overwrite race.** Apollo renders a fresh message's template asynchronously; a body
+   written early could be silently overwritten AFTER a clean verify. Now: stability re-checks at
+   ~+3s and ~+8s after each PUT, auto re-PUT if the marker vanished (max 3 PUTs); success is only
+   declared after a verify that survives the stability window.
+3. **Pane death mid-push.** Closing the reply window mid-push killed the flow silently (contact
+   enrolled, step 1 empty, no error). Now: a localStorage push journal is written BEFORE any
+   Apollo write; the next pane open auto-completes any interrupted push (`resumeUnfinishedPush`),
+   refusing to clobber a draft that already has real content without our marker. Plus a
+   `beforeunload` warning while a push is in flight.
+4. **Stale cached code.** Old reply windows run old iframe-cached code indefinitely. Now: the pane
+   fetches `taskpane.html` from Pages on load and warns loudly when its BUILD stamp is behind.
+
+**Real defects fixed alongside:**
+- **Already-enrolled dead end (reproduced live).** `add_contact_ids` returns `contacts: []` when
+  the contact is already ACTIVE in that sequence; the old code hard-errored, forcing Nick's
+  remove-and-redo dance. Now: on unconfirmed enrollment, `GET /v1/contacts/{id}` tells us the
+  status in THIS sequence — active/paused → mode "existing" reuses the existing drafted step-1
+  manual email (verified live: same message id, body replaced); finished → precise remedy message;
+  none → real enrollment failure.
+- **Draft-search window 15s → 60s** with live progress text (Apollo creates the message
+  asynchronously; 15s was still a guess). `message_not_found` after a fresh enrollment stays
+  PENDING in the journal so the resume pass finishes it when the draft appears late.
+- **Spurious "draft changed — kept."** Consecutive Outlook body reads can differ cosmetically;
+  the pre-discard comparison now compares stripped text, not raw HTML.
+
+**API facts confirmed live (don't re-research):**
+- Remove endpoint: `POST /v1/emailer_campaigns/remove_or_stop_contact_ids` with
+  `{contact_ids, emailer_campaign_ids, mode}` — campaign ids in the BODY. The per-campaign path
+  variant (`/emailer_campaigns/{id}/remove_or_stop_contact_ids`) 404s.
+- `GET /v1/contacts/{id}` works and returns `contact_campaign_statuses` (status values seen:
+  `active`, `finished`).
+- Markers do NOT survive an Apollo send — completed messages carry no `<!--sapw-->`, so sent
+  messages can't be forensically attributed to the add-in.
+- A verified body is durable at rest: test bodies held ≥30s, Nick's real push held ≥75 min.
+
+**Testing pattern that worked (reuse it):** run the shipped `src/apollo.js` unmodified in Node
+(`window` shim + `eval`) against the real proxy and the CLAUDE TEST sequence + the
+`reengage-test-20260706@stormrecruit.com` contact (id `6a4c0f97bd0f2b0018778ec5`), asserting on
+real Apollo state, then remove the contact (which also deletes the drafted messages). Gotcha:
+Cloudflare on the personal proxy account 403s non-browser User-Agents — test harnesses must send
+a browser UA (same bot-block class as the storm-heartbeat-monitor ping gotcha).
+
+---
+
+## Nick's preferred Storm Search outbound HTML style
+
+Canonical clean body: one `<div style="font-family: Calibri, Tahoma, sans-serif; font-size: 12pt;">`
+per logical line, with empty `<div ...>&nbsp;</div>` blocks for blank lines; single font, no nested
+spans, no Mso clutter, no mixed colors. The formatter wraps the cleaned Outlook body in that block as
+the default font; nested children that set their own font (e.g. a Verdana signature) render in those
+fonts — authentic.
+
+**Possible future enhancement** (Nick's "last resort" idea): detect the boundary between Nick's typed
+reply and the quoted thread (Outlook marks it with `<a name="_MailOriginal">` or
+`<div id="divRplyFwdMsg">`) and re-render only Nick's portion using the clean template; leave the quoted
+thread as-is.
+
+---
+
+## Operations
+
+### Quick re-test (after shipping code)
+1. Wait for GitHub Pages redeploy (~1–2 min; a background curl-poll confirms the version is live).
+2. Hard-refresh the Outlook tab (Cmd+Shift+R) — iframes cache aggressively even with version params.
+3. Open a FRESH Reply window (existing ones hold stale code).
+4. Push to Apollo → confirm pane loads → pick mailbox + sequence → push.
+5. Compare Apollo's editor render vs Outlook (Cmd+A → copy → paste into chat to inspect raw HTML).
+6. Remove the test contact afterward.
+
+### Debugging a misbehaving push
+1. Open DevTools Console BEFORE clicking Push; watch `[push]` and `[apollo]` lines.
+2. The result banner shows the explicit failure reason (`verify_mismatch`, `put_rejected`,
+   `message_not_found`). Console logs include HTML length pushed, the message ID, and the post-PUT GET
+   verification.
+3. If the HTML looks wrong but the push succeeded, the bug is in the formatter (local to the browser) —
+   paste the resulting Apollo HTML back to Claude; server logs won't help.
+
+### Repo & hosting
+- Repo `https://github.com/NickA2717/stormsearch-apollo-outlook-addin` (public); Pages
+  `https://nicka2717.github.io/stormsearch-apollo-outlook-addin/`; manifest at `…/manifest.xml`.
+- M365: "Push to Apollo Sequence" deployed to Nick (Specific user). App ID
+  `a8473972-6583-4df4-b72a-56f556e9f059`.
+
+---
+
+## Open item & future polish
+
+- **Outlook draft persistence (only open issue).** `item.close({discardItem:true})` doesn't reliably
+  delete the draft on new Outlook for Mac. Mitigations in place: try modern
+  `closeBehavior: CloseBehavior.Discard` first (Mailbox 1.10+), fall back to legacy `discardItem:true`,
+  and before closing replace the body with marker text "[Pushed to Apollo — safe to delete this draft]"
+  so any leftover is obviously stale, not a duplicate of what was pushed. Long-term: require Mailbox
+  1.10+, or delete drafts server-side via Microsoft Graph.
+- **Future polish:** pin go-to sequences to the top of the dropdown; recent-contacts memory;
+  multi-mailbox routing rules; optionally split Nick's typed reply from the quoted thread and re-render
+  his portion in the clean template (see HTML style above).
+
+---
+
+## Debugging rules (2026-07-08 session)
+- **Test formatter changes against a REAL captured Outlook body, not only synthetic fixtures.**
+  The markdown-link defect (Pass 8) shipped past a green synthetic test because no fixture
+  carried OWA's actual link serialization. Keep a recent real push's HTML on hand as the fixture.
+- **Reproduce read-only first.** Diagnose from Apollo's real production records (message search,
+  campaign contacts, message GETs) before reaching for a write-based test enrollment — the
+  read-only path found the root cause without touching live sequences.
+- **This repo is PUBLIC — never write contact data (emails, names, bodies) into the project
+  folder,** even temporarily. Recovered/pulled PII stays in Apollo or goes where Nick names.
+- **Never `git add -A` in this public repo — stage files by name.** A blanket add committed
+  browser-test debug artifacts (.playwright-mcp/) to the public repo on 2026-07-08; caught and
+  removed one commit later, but the blast radius of a blanket add here is public.
+
+## Security
+- The Apollo API key is stored locally only (roaming settings) — never in this file, the repo, or chat.
+  It was rotated once after a chat-based leak. The hard rule lives in README; enter the key only in the
+  add-in's Settings panel.
+
