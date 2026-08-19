@@ -1,11 +1,22 @@
 /**
  * Apollo API client (browser-side, runs inside the Outlook task pane).
  *
- * Auth: Apollo uses API key in `X-Api-Key` header. Key is stored locally in
- * Office.context.roamingSettings — never in code, never sent except to api.apollo.io.
+ * Auth: Apollo uses API key in `X-Api-Key` header. The key is never in code. It is
+ * stored in Office.context.roamingSettings, which is Microsoft-hosted and roams with
+ * the user's Office profile across their devices — it is NOT local-only. Requests go
+ * to Apollo via Storm's own Cloudflare proxy (baseUrl below), which forwards the key
+ * but does not store it; worker-images additionally validates the key to gate uploads.
  *
  * Notes:
- *  - All endpoints below are documented public Apollo REST API (api.apollo.io/v1/*)
+ *  - Base path: both api.apollo.io/v1/* and api.apollo.io/api/v1/* work (both verified
+ *    HTTP 200 on 2026-08-19). /api/v1 is what Apollo documents today; /v1 is a working
+ *    legacy alias. This client uses /v1 via the proxy — that is not a bug, do not
+ *    "fix" it without re-testing.
+ *  - MOST endpoints below are documented public Apollo REST API, but two are NOT:
+ *    `GET/PUT /emailer_messages/{id}` does not appear in Apollo's 2026-08-19 OpenAPI
+ *    spec at all, and `/emailer_messages/search` is documented GET-only while we POST.
+ *    Both work in production today; treat them as undocumented legacy behaviour that
+ *    could break without notice, and check here first if push-to-step-1 starts failing.
  *  - The `updateManualMessageBody` method is best-effort — we probe whether the
  *    API exposes per-contact body override on a queued manual email. If it
  *    doesn't, the caller falls back to clipboard copy + manual paste.

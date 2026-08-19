@@ -67,7 +67,7 @@ See "wrangler asterisk bug" section above for deploy command.
 You'll need:
 - Node + npm (already installed if `wrangler` worked before)
 - `wrangler login` (cached creds may still be valid)
-- The Apollo API key in the worker's environment — set via `wrangler secret put APOLLO_API_KEY` if it isn't already
+- No Apollo key in the worker. The proxy is pure pass-through: the add-in holds the user's own key in `Office.context.roamingSettings` and sends it per request, and the worker forwards `x-api-key` without storing it (verified 2026-08-19 — `worker/wrangler.toml` defines no such secret and no code reads `env.APOLLO_API_KEY`).
 
 ### Outlook sideload (re-validation)
 

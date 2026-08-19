@@ -70,7 +70,7 @@ Reply to any email → click **Push to Apollo** in the ribbon → confirm contac
 - `POST /v1/contacts/search` — find contact by email
 - `POST /v1/contacts` — create contact if missing
 - `POST /v1/emailer_campaigns/{id}/add_contact_ids` — enroll contact in sequence
-- `POST /v1/emailer_messages/search` + `PUT /v1/emailer_messages/{id}` — push body to step 1 (best-effort; falls back to clipboard if API rejects)
+- `POST /v1/emailer_messages/search` + `PUT /v1/emailer_messages/{id}` — push body to step 1 (best-effort; falls back to clipboard if API rejects). **Undocumented:** neither appears in Apollo's 2026-08-19 OpenAPI spec in this form (`/emailer_messages/{id}` is absent entirely; `/emailer_messages/search` is documented GET-only). They work today — treat as legacy behaviour that could break without notice.
 
 ## Development notes
 

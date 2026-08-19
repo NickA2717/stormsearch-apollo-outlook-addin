@@ -9,6 +9,16 @@
 - **Apollo's editor is TinyMCE** (`forced_root_block:'p'`): top-level `<div>` rewrites to `<p>` on load; inline styles DO stick — style the content, don't fight the block structure.
 - Signature logos are `cid:` attachments invisible to Apollo recipients — the permanent inline-image Worker hosts each attachment's bytes at push time.
 
+## The key-handling disclosure was wrong for over a month (2026-08-19)
+
+`taskpane.html` told the user, under the API-key input: *"Stored only on your Mac. Never sent anywhere except Apollo."* **Both halves were false.** The key is written to `Office.context.roamingSettings`, which is Microsoft-hosted and roams with the Office profile across the user's devices - not local, and not on their Mac only. And every request goes to `stormsearch-apollo-proxy.n-alioto7.workers.dev` (`src/apollo.js`), with `worker-images` accepting the same key as its upload gate - so the key reaches Storm infrastructure on every call. Corrected 2026-08-19 to say exactly that.
+
+**Why it survived:** `Reports/(2026-07-12) - Codex_Audit_Verification.md:26` flagged it on 2026-07-12 and it was never patched. A finding recorded in the vault but not in this file is a finding nobody acts on - **a defect in this project's code gets its fix tracked HERE, whatever other document happened to notice it.**
+
+**The general rule:** any UI text making a promise about where a credential goes is a claim about the whole request path, not about the line of code next to it. Re-read the client's base URL and every worker binding before writing or trusting one. Same shape as `MIGRATION_NOTES.md`'s stale `wrangler secret put APOLLO_API_KEY` line (also removed 2026-08-19) - the worker stores no key and never did; the instruction was left over from an earlier design.
+
+**Two API paths in this project are undocumented, and that is fine.** `GET`/`PUT /emailer_messages/{id}` appear nowhere in Apollo's 2026-08-19 OpenAPI spec, and `/emailer_messages/search` is documented GET-only while we POST. Both work in production. They are now labelled as legacy in `src/apollo.js` and `README.md` - **do not "fix" them to match the spec**, and check them first if push-to-step-1 ever breaks. Likewise the `/v1` base (vs the documented `/api/v1`): both return 200, `/v1` is a working alias, not a bug.
+
 ## Design decisions (Nick's)
 
 - 2 clicks in Outlook + 1 in Apollo; sequence dropdown = ACTIVE only; sender picked per push; contact lookup always shows name+title+company+last-activity for verification, auto-create on no match.
