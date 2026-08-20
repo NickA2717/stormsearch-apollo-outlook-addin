@@ -1,6 +1,6 @@
 # stormsearch-apollo-outlook-addin — learnings (HOT — budget-capped)
 
-**Every full write-up is VERBATIM in `learnings-archive.md`** ("hot-file migration — 2026-08-14") — the seven-pass formatter spec, CORS/image Worker details and the reliability-overhaul story live there. New write-ups APPEND there; this file stays under the fleet budget (`python3 ~/StormDev/check_memory_budgets.py --check`).
+**Every full write-up is VERBATIM in `learnings-archive.md`** ("hot-file migration — 2026-08-14") — the seven-pass formatter spec, CORS/image Worker details and the reliability-overhaul story live there. New write-ups APPEND there.
 
 ## Do NOT re-research (confirmed hard limits)
 
