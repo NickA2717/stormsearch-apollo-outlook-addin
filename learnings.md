@@ -1,6 +1,6 @@
-# stormsearch-apollo-outlook-addin — learnings (HOT — budget-capped)
+# stormsearch-apollo-outlook-addin — learnings (HOT)
 
-**Every full write-up is VERBATIM in `learnings-archive.md`** ("hot-file migration — 2026-08-14") — the seven-pass formatter spec, CORS/image Worker details and the reliability-overhaul story live there. New write-ups APPEND there.
+**Every full write-up is VERBATIM in `learnings-archive.md`** ("hot-file migration — 2026-08-14") — the seven-pass formatter spec, CORS/image Worker details and the reliability-overhaul story live there.
 
 ## Do NOT re-research (confirmed hard limits)
 
