@@ -21,3 +21,5 @@ package-lock.json
 worker/node_modules/
 .DS_Store
 .playwright-mcp/
+logs/
+__pycache__/

@@ -1,81 +1,13 @@
----
-title: Storm Search Apollo Outlook Add-in — README
-type: readme
-project-kind: code
-status: active
-tags: [readme, project, apollo, outlook, addin]
-related:
-  - "[[Storm Search Apollo Outlook Add-in]]"
-  - "[[+ Code Projects]]"
----
+# stormsearch-apollo-outlook-addin
 
-# Storm Search × Apollo — Outlook Add-in
+An Outlook add-in for Storm Search. Reply to an email, click **Push to Apollo**, confirm the contact, pick a sender mailbox and an active sequence, and the add-in puts your typed reply (with the formatted thread) into Apollo step 1's manual email and discards the Outlook draft. You click Send in Apollo and Apollo's follow-up steps continue from there.
 
-An Outlook add-in that pushes a typed email reply into an Apollo sequence's manual email step, then discards the Outlook draft. Apollo's auto follow-up steps continue from there.
+The repo is public because Outlook loads the manifest and the task pane from GitHub Pages. Manifest URL for sideloading: `https://nicka2717.github.io/stormsearch-apollo-outlook-addin/manifest.xml`.
 
-**Manifest URL:** `https://nicka2717.github.io/stormsearch-apollo-outlook-addin/manifest.xml`
+Install: Microsoft 365 admin center, Settings, Integrated apps, Upload custom apps, Office Add-in, paste the URL; or per user through Outlook, Get Add-ins, My Add-ins, Add a custom add-in, From URL. On first open, enter your own Apollo API key in the Settings panel; it is kept in your Outlook profile's roaming settings and sent to Apollo through the project's Cloudflare proxy on every call.
 
-## What it does
+What is where, and what never to change, is in `CLAUDE.md`. Facts about Apollo and Outlook that code cannot fix are in `learnings.md`.
 
-1. You hit Reply on an email in Outlook and type your message
-2. You click the **Push to Apollo** button
-3. The add-in:
-   - Looks up the recipient in Apollo by email
-   - Lets you confirm the contact + pick a sender mailbox + pick a sequence
-   - Pushes your typed reply (with the formatted thread) into Apollo step 1's manual email
-   - Discards the Outlook draft
-4. You hop to Apollo, click Send on step 1, and Apollo handles the rest
+Apollo endpoints used: `POST /v1/emailer_campaigns/search`, `GET /v1/email_accounts`, `POST /v1/contacts/search`, `POST /v1/contacts`, `POST /v1/emailer_campaigns/{id}/add_contact_ids`, and best-effort `POST /v1/emailer_messages/search` plus `PUT /v1/emailer_messages/{id}` (undocumented in Apollo's spec; legacy behaviour that could break without notice).
 
-## Setup (one-time)
-
-### 1. Sideload the manifest in Outlook
-
-**Microsoft 365 admin route (recommended for org use):**
-
-1. Open the Microsoft 365 admin center → **Settings → Integrated apps → Upload custom apps**
-2. Choose **Office Add-in** and paste the manifest URL above
-3. Assign to specific users (you) or your whole org
-
-**Per-user route (for testing on just your account):**
-
-- Outlook on the web: open any email → Apps → Get Add-ins → My Add-ins → Add a custom add-in → From URL → paste manifest URL
-- New Outlook for Mac: Outlook menu → Settings → Get Add-ins (icon) → My Add-ins → Add a custom add-in → From URL
-
-### 2. First-time API key
-
-When you first open the add-in, it'll show a Settings panel asking for your Apollo API key. Paste it in. The key is stored locally in your Outlook profile via `Office.context.roamingSettings`. It never leaves your machine except to call Apollo's API directly.
-
-**Security rule (hard):** never paste the Apollo API key into chat, code, or any committed file — enter it ONLY in the add-in's Settings panel. (A chat-based leak forced a key rotation once; the add-in is built so the key only ever lives in roaming settings.)
-
-### 3. Use it
-
-Reply to any email → click **Push to Apollo** in the ribbon → confirm contact, pick sender + sequence → done.
-
-## Architecture
-
-- `manifest.xml` — Office Add-in manifest. Defines the ribbon button on the message compose surface.
-- `index.html` — landing page for the GitHub Pages site root.
-- `src/taskpane.html` — main UI shown when the user clicks the ribbon button.
-- `src/taskpane.css` — styling.
-- `src/taskpane.js` — controller. Handles Office.js init, draft reading, push flow, draft discard.
-- `src/apollo.js` — Apollo REST API client (in browser, with API key from roaming settings).
-- `src/thread-formatter.js` — turns the Outlook draft body into Apollo-ready HTML.
-- `src/commands.html` — required Office Add-in function file.
-- `assets/icon-*.png` — icons referenced by the manifest.
-
-## Key API endpoints
-
-- `POST /v1/emailer_campaigns/search` — list active sequences
-- `GET /v1/email_accounts` — list sender mailboxes
-- `POST /v1/contacts/search` — find contact by email
-- `POST /v1/contacts` — create contact if missing
-- `POST /v1/emailer_campaigns/{id}/add_contact_ids` — enroll contact in sequence
-- `POST /v1/emailer_messages/search` + `PUT /v1/emailer_messages/{id}` — push body to step 1 (best-effort; falls back to clipboard if API rejects). **Undocumented:** neither appears in Apollo's 2026-08-19 OpenAPI spec in this form (`/emailer_messages/{id}` is absent entirely; `/emailer_messages/search` is documented GET-only). They work today — treat as legacy behaviour that could break without notice.
-
-## Development notes
-
-See `learnings.md` for full project context, decisions, and the Apollo threading research that shaped this design.
-
-## License
-
-MIT
+License: MIT.
