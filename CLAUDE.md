@@ -11,6 +11,7 @@ An Outlook add-in that pushes a typed email reply into an Apollo sequence's manu
 - A change to `src/` bumps the `?v=` stamp on the stylesheet and four script tags in `src/taskpane.html`. Reason: Office iframes cache aggressively.
 - Do not "fix" the two undocumented Apollo calls (`/emailer_messages/search` by POST, `PUT /emailer_messages/{id}`) or the `/v1` base to match the spec; they work in production. Check them first if a push to step 1 ever breaks.
 - This project has no tests and no scheduled job, so it has no watchdog row.
+- Both Workers log to D1 `apollo-addin-calls` (2026-10-23): one row per proxied Apollo call and per image upload or failed image fetch, with method, Apollo path, status and milliseconds; never an Apollo key, a body or a query string, and never a successful image fetch (that would track recipients opening email). Workers Logs stays off in both `wrangler.toml` files because it records request headers, and those carry the key. Read it from `worker/`: `./node_modules/.bin/wrangler d1 execute apollo-addin-calls --remote --command "SELECT * FROM calls ORDER BY id DESC LIMIT 50"`. The schema lives in `worker/migrations/`.
 
 ## Where things are
 
@@ -23,8 +24,8 @@ Served to Outlook (public URL base `https://nicka2717.github.io/stormsearch-apol
 
 Not served:
 
-- `worker/`: the CORS proxy Worker (`stormsearch-apollo-proxy`) that forwards the browser's Apollo calls, since Apollo sends CORS headers only to its own extension.
-- `worker-images/`: the Worker that hosts signature images at push time (one KV namespace).
+- `worker/`: the CORS proxy Worker (`stormsearch-apollo-proxy`) that forwards the browser's Apollo calls, since Apollo sends CORS headers only to its own extension. On the firm Cloudflare account (`stormsearch-apollo-proxy.jyurk.workers.dev`) since 2026-10-23; the old copy on Nick's personal account (`n-alioto7`) is a fallback until the switch is proven in Outlook, then Nick deletes it.
+- `worker-images/`: the Worker that hosts signature images at push time (one KV namespace), also on the firm account.
 - `learnings.md`: outside-world facts. `README.md`: what it is and how to install it.
 
 ## Layout exceptions

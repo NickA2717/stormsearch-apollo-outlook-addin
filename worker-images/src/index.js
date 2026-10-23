@@ -29,11 +29,36 @@
  *   - 1-year retention (KV TTL) — matches the immutable cache header.
  *   - Served with X-Content-Type-Options: nosniff.
  *   - The key is used transiently for validation only; never stored.
+ *
+ * Call log (2026-10-23): one D1 row per upload and per failed image fetch, in
+ * the database the CORS proxy logs to. Never the key, the image or its public
+ * key. Successful image fetches are NOT logged: each one is a recipient opening
+ * an email, and this log is not a read tracker. Workers Logs stays off
+ * (wrangler.toml) because it records request headers, and uploads carry the
+ * user's key.
  */
 
 const MAX_BYTES = 2 * 1024 * 1024;
 const DAILY_UPLOAD_CAP = 500;
 const RETENTION_SECONDS = 365 * 24 * 3600;
+const LOG_RETAIN_DAYS = 90;
+
+// Best effort: a failed write never affects the request. Prunes rows past the
+// retention window on about one write in a hundred.
+function logCall(env, ctx, row) {
+  if (!env.CALL_LOG) return;
+  const now = Date.now();
+  const stmts = [
+    env.CALL_LOG.prepare(
+      "INSERT INTO calls (ts, worker, method, endpoint, status, ms, detail) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    ).bind(new Date(now).toISOString(), "images", row.method, row.endpoint, row.status, row.ms, row.detail || null),
+  ];
+  if (Math.random() < 0.01) {
+    const cutoff = new Date(now - LOG_RETAIN_DAYS * 86400000).toISOString();
+    stmts.push(env.CALL_LOG.prepare("DELETE FROM calls WHERE ts < ?").bind(cutoff));
+  }
+  ctx.waitUntil(env.CALL_LOG.batch(stmts).catch(() => {}));
+}
 
 // Declared content-type allowlist + the magic bytes each must carry.
 const MAGIC = {
@@ -122,7 +147,7 @@ async function sha256Hex(buf) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const origin = request.headers.get("Origin") || "";
     const url = new URL(request.url);
 
@@ -138,7 +163,10 @@ export default {
     const serveMatch = url.pathname.match(/^\/img\/([0-9a-f]{32})$/);
     if (request.method === "GET" && serveMatch) {
       const found = await env.IMG.getWithMetadata(`i:${serveMatch[1]}`, "arrayBuffer");
-      if (!found || !found.value) return json({ error: "not_found" }, 404, origin);
+      if (!found || !found.value) {
+        logCall(env, ctx, { method: "GET", endpoint: "/img/<key>", status: 404, ms: 0, detail: "not_found" });
+        return json({ error: "not_found" }, 404, origin);
+      }
       const ct = (found.metadata && found.metadata.ct) || "image/png";
       return new Response(found.value, {
         status: 200,
@@ -154,52 +182,66 @@ export default {
 
     // ---- Upload ----
     if (request.method === "POST" && url.pathname === "/img") {
-      const ct = (request.headers.get("Content-Type") || "").split(";")[0].trim().toLowerCase();
-      if (!MAGIC[ct]) {
-        return json({ error: "unsupported_content_type", contentType: ct }, 415, origin);
-      }
+      // Every upload outcome leaves one call-log row.
+      const started = Date.now();
+      const done = (res, detail) => {
+        logCall(env, ctx, { method: "POST", endpoint: "/img", status: res.status, ms: Date.now() - started, detail });
+        return res;
+      };
+      try {
+        const ct = (request.headers.get("Content-Type") || "").split(";")[0].trim().toLowerCase();
+        if (!MAGIC[ct]) {
+          return done(json({ error: "unsupported_content_type", contentType: ct }, 415, origin), "unsupported_content_type");
+        }
 
-      // Reject oversize before buffering anything.
-      const declaredLen = parseInt(request.headers.get("Content-Length") || "0", 10);
-      if (declaredLen > MAX_BYTES) {
-        return json({ error: "too_large", maxBytes: MAX_BYTES }, 413, origin);
-      }
+        // Reject oversize before buffering anything.
+        const declaredLen = parseInt(request.headers.get("Content-Length") || "0", 10);
+        if (declaredLen > MAX_BYTES) {
+          return done(json({ error: "too_large", maxBytes: MAX_BYTES }, 413, origin), "too_large");
+        }
 
-      if (!(await apolloKeyIsFirm(request.headers.get("X-Api-Key"), env))) {
-        return json({ error: "invalid_api_key" }, 401, origin);
-      }
+        if (!(await apolloKeyIsFirm(request.headers.get("X-Api-Key"), env))) {
+          return done(json({ error: "invalid_api_key" }, 401, origin), "invalid_api_key");
+        }
 
-      // Daily quota — fail closed.
-      const quotaKey = `q:${new Date().toISOString().slice(0, 10)}`;
-      const used = parseInt((await env.IMG.get(quotaKey)) || "0", 10);
-      if (used >= DAILY_UPLOAD_CAP) {
-        return json({ error: "quota_exceeded" }, 429, origin);
-      }
+        // Daily quota — fail closed.
+        const quotaKey = `q:${new Date().toISOString().slice(0, 10)}`;
+        const used = parseInt((await env.IMG.get(quotaKey)) || "0", 10);
+        if (used >= DAILY_UPLOAD_CAP) {
+          return done(json({ error: "quota_exceeded" }, 429, origin), "quota_exceeded");
+        }
 
-      const body = await request.arrayBuffer();
-      if (body.byteLength === 0) return json({ error: "empty_body" }, 400, origin);
-      if (body.byteLength > MAX_BYTES) {
-        return json({ error: "too_large", maxBytes: MAX_BYTES }, 413, origin);
-      }
-      if (!magicMatches(ct, new Uint8Array(body))) {
-        return json({ error: "content_mismatch" }, 415, origin);
-      }
+        const body = await request.arrayBuffer();
+        if (body.byteLength === 0) return done(json({ error: "empty_body" }, 400, origin), "empty_body");
+        if (body.byteLength > MAX_BYTES) {
+          return done(json({ error: "too_large", maxBytes: MAX_BYTES }, 413, origin), "too_large");
+        }
+        if (!magicMatches(ct, new Uint8Array(body))) {
+          return done(json({ error: "content_mismatch" }, 415, origin), "content_mismatch");
+        }
 
-      // Dedupe via an internal hash→key map; the public key stays random.
-      const hash = await sha256Hex(body);
-      const existingKey = await env.IMG.get(`h:${hash}`);
-      let key = existingKey;
-      if (!key) {
-        key = randomKey();
-        await env.IMG.put(`i:${key}`, body, {
-          metadata: { ct },
-          expirationTtl: RETENTION_SECONDS,
-        });
-        await env.IMG.put(`h:${hash}`, key, { expirationTtl: RETENTION_SECONDS });
-        await env.IMG.put(quotaKey, String(used + 1), { expirationTtl: 2 * 24 * 3600 });
-      }
+        // Dedupe via an internal hash→key map; the public key stays random.
+        const hash = await sha256Hex(body);
+        const existingKey = await env.IMG.get(`h:${hash}`);
+        let key = existingKey;
+        if (!key) {
+          key = randomKey();
+          await env.IMG.put(`i:${key}`, body, {
+            metadata: { ct },
+            expirationTtl: RETENTION_SECONDS,
+          });
+          await env.IMG.put(`h:${hash}`, key, { expirationTtl: RETENTION_SECONDS });
+          await env.IMG.put(quotaKey, String(used + 1), { expirationTtl: 2 * 24 * 3600 });
+        }
 
-      return json({ url: `${url.origin}/img/${key}`, deduped: !!existingKey }, 200, origin);
+        return done(
+          json({ url: `${url.origin}/img/${key}`, deduped: !!existingKey }, 200, origin),
+          `${ct} ${body.byteLength} bytes${existingKey ? ", deduped" : ""}`
+        );
+      } catch (err) {
+        done(new Response(null, { status: 500 }), `exception: ${String(err).slice(0, 120)}`);
+        throw err;
+      }
     }
 
     return json({ error: "not_found" }, 404, origin);

@@ -26,8 +26,9 @@ class ApolloClient {
   constructor(apiKey) {
     this.apiKey = apiKey;
     // Browser → CORS proxy → Apollo. The proxy adds the Access-Control-Allow-Origin
-    // headers Apollo doesn't return for our origin. See worker/src/index.js.
-    this.baseUrl = "https://stormsearch-apollo-proxy.n-alioto7.workers.dev/v1";
+    // headers Apollo doesn't return for our origin. See worker/src/index.js. On the
+    // firm Cloudflare account since 2026-10-23 (was stormsearch-apollo-proxy.n-alioto7).
+    this.baseUrl = "https://stormsearch-apollo-proxy.jyurk.workers.dev/v1";
   }
 
   async _request(method, path, body) {

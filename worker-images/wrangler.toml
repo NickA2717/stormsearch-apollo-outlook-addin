@@ -1,9 +1,7 @@
 name = "apollo-addin-images"
 main = "src/index.js"
 compatibility_date = "2026-07-08"
-# Firm Cloudflare account (jyurk) — the personal account that hosts the CORS
-# proxy has no deploy credentials on this machine; several other Storm workers
-# already live on the firm account.
+# Firm Cloudflare account (jyurk), where the CORS proxy also lives since 2026-10-23.
 account_id = "44352d119e27f338ca2eda18ef410e7c"
 
 # KV namespace holding the hosted signature images (content-addressed by
@@ -11,3 +9,14 @@ account_id = "44352d119e27f338ca2eda18ef410e7c"
 [[kv_namespaces]]
 binding = "IMG"
 id = "7694b26f5fb840309d679dd798ac79a7"
+
+# Call log: one row per upload and per failed image fetch (src/index.js). The
+# database and its schema belong to the CORS proxy (../worker/migrations).
+[[d1_databases]]
+binding = "CALL_LOG"
+database_name = "apollo-addin-calls"
+database_id = "5ceea248-cf11-4a52-bf37-3dfd7dded62b"
+
+# Workers Logs stays off: it records request headers, and uploads carry an Apollo key.
+[observability]
+enabled = false
