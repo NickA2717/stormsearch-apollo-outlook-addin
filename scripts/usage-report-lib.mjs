@@ -193,14 +193,30 @@ export function healthSql(days = 7) {
 	return `SELECT blob1 AS worker, blob2 AS kind, blob3 AS result, SUM(_sample_interval) AS n, MAX(timestamp) AS last FROM ${HEALTH_DATASET} WHERE timestamp > NOW() - INTERVAL '${days}' DAY GROUP BY worker, kind, result ORDER BY worker, kind, result`;
 }
 
-/** { text, ok }: ok is false when any write was lost or the D1 binding was missing. */
-export function formatHealth(rows, days = 7) {
+/** D1 rows in the health window, read only when Analytics Engine has no points, to tell "no use" from "no health points". */
+export function healthD1CountSql(days = 7) {
+	// Rows from before the usage log (no call_id) never came with health points, so they never count.
+	return `SELECT COUNT(*) AS n FROM calls WHERE ts >= ${since(days)} AND call_id IS NOT NULL`;
+}
+
+/**
+ * { text, ok }: ok is false when any write was lost or the D1 binding was missing, or when
+ * Analytics Engine has no points while D1 holds rows in the same window (the Workers cannot
+ * write health points). `d1Rows` is that D1 count, or null when it was not read.
+ */
+export function formatHealth(rows, days = 7, d1Rows = null) {
 	const head = `Usage-log delivery health, last ${days} days (Analytics Engine ${HEALTH_DATASET}, independent of D1)`;
-	if (!rows.length)
+	if (!rows.length) {
+		if (Number(d1Rows) > 0)
+			return {
+				ok: false,
+				text: `${head}\n  NO HEALTH POINTS: D1 holds ${Number(d1Rows)} row(s) in this window but Analytics Engine has none, so the Workers cannot write health points (check the health binding). Points take a minute or more to arrive; re-run if the rows are only minutes old.`,
+			};
 		return {
 			ok: true,
-			text: `${head}\n  No log writes recorded. Either nobody used the add-in, or the Workers cannot write health points; a D1 report with rows in the same window means the second. Points take a minute or more to arrive.`,
+			text: `${head}\n  No log writes recorded, and D1 has no rows in this window either: nobody used the add-in. Points take a minute or more to arrive.`,
 		};
+	}
 	const lost = rows.filter((r) => r.result === 'lost' || r.result === 'no_binding').reduce((n, r) => n + Number(r.n), 0);
 	const verdict = lost ? `LOST WRITES: ${lost} log write(s) did not land (rows below). The calls themselves were answered.` : 'OK: no lost writes.';
 	return { ok: !lost, text: [head, '  ' + verdict, table(rows, [['worker', 'worker'], ['kind', 'write'], ['result', 'result'], ['n', 'count'], ['last', 'last (UTC)']])].join('\n') };

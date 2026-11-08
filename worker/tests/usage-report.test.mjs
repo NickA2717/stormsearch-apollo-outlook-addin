@@ -11,6 +11,7 @@ import {
 	bandOf,
 	buildSql,
 	formatHealth,
+	healthD1CountSql,
 	formatPerformanceLog,
 	formatReport,
 	parseArgs,
@@ -101,6 +102,17 @@ test('health verdict: lost or unbound writes fail, none is not read as fine with
 	assert.equal(bad.ok, false);
 	assert.match(bad.text, /LOST WRITES: 2/);
 	assert.equal(formatHealth([{ worker: 'proxy', kind: 'finish', result: 'no_binding', n: 1 }]).ok, false);
+	// No health points while D1 has rows: the Workers cannot write points, never a green result.
+	assert.equal(formatHealth([], 7, 0).ok, true);
+	const silent = formatHealth([], 7, 3);
+	assert.equal(silent.ok, false);
+	assert.match(silent.text, /NO HEALTH POINTS: D1 holds 3 row/);
+});
+
+test('the health fallback count runs on the real schema', async () => {
+	const db = await seeded();
+	// 10 logged rows; the row from before this log (no call_id) never counts.
+	assert.equal(db.prepare(healthD1CountSql(7)).get().n, 10);
 });
 
 test('D1 response shape is checked', () => {

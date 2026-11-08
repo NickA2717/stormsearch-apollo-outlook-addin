@@ -25,6 +25,7 @@ import {
 	validateD1Response,
 	formatReport,
 	healthSql,
+	healthD1CountSql,
 	formatHealth,
 	formatPerformanceLog,
 } from './usage-report-lib.mjs';
@@ -69,7 +70,13 @@ async function health() {
 		throw new Error('Analytics Engine answered with something that is not JSON; health unknown.');
 	}
 	if (!Array.isArray(data)) throw new Error('Analytics Engine answered without a data array; health unknown.');
-	return formatHealth(data, 7);
+	// No points at all: D1 tells "nobody used it" from "the Workers cannot write health points".
+	let d1Rows = null;
+	if (!data.length) {
+		const [rows] = validateD1Response(runD1(healthD1CountSql(7)), 1);
+		d1Rows = Number(rows[0]?.n ?? 0);
+	}
+	return formatHealth(data, 7, d1Rows);
 }
 
 async function main() {
