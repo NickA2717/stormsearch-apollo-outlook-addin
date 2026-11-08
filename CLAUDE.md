@@ -10,8 +10,10 @@ An Outlook add-in that pushes a typed email reply into an Apollo sequence's manu
 - Both Workers deploy with `npm run deploy` from their own folder, which runs the pinned local wrangler; never `npx wrangler`, which fetches whatever version is newest that day. Reason: fleet pin, 2026-09-28.
 - A change to `src/` bumps the `?v=` stamp on the stylesheet and four script tags in `src/taskpane.html`. Reason: Office iframes cache aggressively.
 - Do not "fix" the two undocumented Apollo calls (`/emailer_messages/search` by POST, `PUT /emailer_messages/{id}`) or the `/v1` base to match the spec; they work in production. Check them first if a push to step 1 ever breaks.
-- This project has no tests and no scheduled job, so it has no watchdog row.
-- Both Workers log to D1 `apollo-addin-calls` (2026-10-23): one row per proxied Apollo call and per image upload or failed image fetch, with method, Apollo path, status and milliseconds; never an Apollo key, a body or a query string, and never a successful image fetch (that would track recipients opening email). Workers Logs stays off in both `wrangler.toml` files because it records request headers, and those carry the key. Read it from `worker/`: `./node_modules/.bin/wrangler d1 execute apollo-addin-calls --remote --command "SELECT * FROM calls ORDER BY id DESC LIMIT 50"`. The schema lives in `worker/migrations/`.
+- Run `npm test` in `worker/` and in `worker-images/` before deploying either; the suites are offline (no key, no network) and prove every reply byte-identical with the usage log on, off, failing and hanging. Reason: a teammate notices a changed reply before anyone reads a log. There is no scheduled job, so there is no watchdog row.
+- Both Workers write one usage log, D1 `apollo-addin-calls` (call log 2026-10-23, usage log 2026-11-08): one row per proxied Apollo call and per image upload or failed image request, metadata only, never an Apollo key in any form, a body, a query string, an email address, an image or a successful image fetch (that would track recipients opening email). What it records, how to read it (`scripts/usage-report.mjs`, `--health`) and what is settled: `docs/RUNBOOK_USAGE_LOG.md`, built to the team's shared usage-log standard (Rulebook_Usage_Logs). Reason: one log shape across connectors shows who uses what, what fails and what is slow.
+- Every speed change to either Worker gets a `docs/PERFORMANCE_LOG.md` entry on its branch, before merge; that file is the one record file kept beside the four docs. Reason: merged code is not proof of a gain.
+- Workers Logs stays off in both `wrangler.toml` files because it records request headers, and those carry each teammate's key. Schema changes go in `worker/migrations/` as additive, nullable columns, applied with `CI=1 ./node_modules/.bin/wrangler d1 migrations apply apollo-addin-calls --remote` from `worker/` before the deploy. Reason: the running version keeps inserting until the new one replaces it.
 
 ## Where things are
 
@@ -26,6 +28,8 @@ Not served:
 
 - `worker/`: the CORS proxy Worker (`stormsearch-apollo-proxy`) that forwards the browser's Apollo calls, since Apollo sends CORS headers only to its own extension. On the firm Cloudflare account (`stormsearch-apollo-proxy.jyurk.workers.dev`) since 2026-10-23; the old copy on Nick's personal account (`n-alioto7`) is a fallback until the switch is proven in Outlook, then Nick deletes it.
 - `worker-images/`: the Worker that hosts signature images at push time (one KV namespace), also on the firm account.
+- `worker/src/usage-log.js`: the usage-log writer both Workers import; `worker/tests/` and `worker-images/tests/`: the offline suites.
+- `docs/`: `RUNBOOK_USAGE_LOG.md` and `PERFORMANCE_LOG.md`. `scripts/`: `usage-report.mjs` (the read-only report) and `capture-replies.mjs` (before and after reply hashes for a deploy).
 - `learnings.md`: outside-world facts. `README.md`: what it is and how to install it.
 
 ## Layout exceptions

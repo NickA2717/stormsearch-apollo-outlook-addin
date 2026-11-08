@@ -10,12 +10,21 @@ account_id = "44352d119e27f338ca2eda18ef410e7c"
 binding = "IMG"
 id = "7694b26f5fb840309d679dd798ac79a7"
 
-# Call log: one row per upload and per failed image fetch (src/index.js). The
+# Usage log: one row per upload and per failed image request (src/index.js). The
 # database and its schema belong to the CORS proxy (../worker/migrations).
 [[d1_databases]]
 binding = "CALL_LOG"
 database_name = "apollo-addin-calls"
 database_id = "5ceea248-cf11-4a52-bf37-3dfd7dded62b"
+
+# Usage log (2026-11-08): the Worker version on every row, and one Analytics Engine point per log
+# write so lost writes show without D1 (docs/RUNBOOK_USAGE_LOG.md). Both Workers share the dataset.
+[version_metadata]
+binding = "CF_VERSION_METADATA"
+
+[[analytics_engine_datasets]]
+binding = "USAGE_HEALTH"
+dataset = "apollo_addin_usage_health"
 
 # Workers Logs stays off: it records request headers, and uploads carry an Apollo key.
 [observability]

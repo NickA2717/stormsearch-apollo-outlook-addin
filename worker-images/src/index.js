@@ -30,35 +30,43 @@
  *   - Served with X-Content-Type-Options: nosniff.
  *   - The key is used transiently for validation only; never stored.
  *
- * Call log (2026-10-23): one D1 row per upload and per failed image fetch, in
- * the database the CORS proxy logs to. Never the key, the image or its public
- * key. Successful image fetches are NOT logged: each one is a recipient opening
- * an email, and this log is not a read tracker. Workers Logs stays off
- * (wrangler.toml) because it records request headers, and uploads carry the
- * user's key.
+ * Usage log (2026-11-08, after the 2026-10-23 call log): one D1 row per upload
+ * and per failed image request, in the table the CORS proxy logs to, written
+ * by the proxy's usage-log.js: outcome, the Worker's fixed error code, the
+ * upload gate's result as a code, Apollo's time and status for that check,
+ * the upload's type and size, and whether it deduped. Never the key, the
+ * image, its hash or its public key. Successful image fetches are NOT logged:
+ * each one is a recipient opening an email, and this log is not a read
+ * tracker. Workers Logs stays off (wrangler.toml) because it records request
+ * headers, and uploads carry the user's key.
  */
+
+import { beginCall } from "../../worker/src/usage-log.js";
 
 const MAX_BYTES = 2 * 1024 * 1024;
 const DAILY_UPLOAD_CAP = 500;
 const RETENTION_SECONDS = 365 * 24 * 3600;
-const LOG_RETAIN_DAYS = 90;
 
-// Best effort: a failed write never affects the request. Prunes rows past the
-// retention window on about one write in a hundred.
-function logCall(env, ctx, row) {
-  if (!env.CALL_LOG) return;
-  const now = Date.now();
-  const stmts = [
-    env.CALL_LOG.prepare(
-      "INSERT INTO calls (ts, worker, method, endpoint, status, ms, detail) VALUES (?, ?, ?, ?, ?, ?, ?)"
-    ).bind(new Date(now).toISOString(), "images", row.method, row.endpoint, row.status, row.ms, row.detail || null),
-  ];
-  if (Math.random() < 0.01) {
-    const cutoff = new Date(now - LOG_RETAIN_DAYS * 86400000).toISOString();
-    stmts.push(env.CALL_LOG.prepare("DELETE FROM calls WHERE ts < ?").bind(cutoff));
-  }
-  ctx.waitUntil(env.CALL_LOG.batch(stmts).catch(() => {}));
-}
+// Failure category of each of this Worker's own error codes (the usage log's fixed list).
+const CATEGORY = {
+  unsupported_content_type: "input_validation",
+  too_large: "input_validation",
+  empty_body: "input_validation",
+  content_mismatch: "input_validation",
+  not_found: "input_validation",
+  quota_exceeded: "rate_limit",
+};
+// Failure category of each upload-gate result that answers 401 invalid_api_key.
+const KEY_CATEGORY = {
+  no_key: "authentication",
+  rejected: "authentication",
+  not_firm: "authentication",
+  unreadable: "upstream_error",
+  unreachable: "upstream_error",
+  no_team_config: "internal",
+};
+// Apollo refused the key check: a 429 or 5xx is Apollo's trouble, anything else the key's.
+const rejectedCategory = (status) => (status === 429 ? "rate_limit" : status >= 500 ? "upstream_error" : "authentication");
 
 // Declared content-type allowlist + the magic bytes each must carry.
 const MAGIC = {
@@ -106,20 +114,29 @@ function json(obj, status, origin) {
 
 /**
  * The upload gate: the key must be a working Apollo key AND belong to the
- * firm's Apollo team. Any error/outage/shape-change → false (fail closed).
+ * firm's Apollo team. Any error/outage/shape-change → not "firm" (fail closed).
+ * Returns the result as a usage-log code; only "firm" lets an upload through.
+ * `note` receives Apollo's status and time for the log.
  */
-async function apolloKeyIsFirm(apiKey, env) {
-  if (!apiKey || !env.FIRM_TEAM_ID) return false;
+async function apolloKeyCheck(apiKey, env, note) {
+  if (!apiKey) return "no_key";
+  if (!env.FIRM_TEAM_ID) return "no_team_config";
+  const started = Date.now();
+  let stage = "unreachable";
   try {
     const res = await fetch("https://api.apollo.io/v1/users/api_profile", {
       headers: { "X-Api-Key": apiKey },
     });
-    if (!res.ok) return false;
+    note({ upstream_status: res.status, upstream_ms: Date.now() - started });
+    if (!res.ok) return "rejected";
+    stage = "unreadable";
     const data = await res.json();
+    note({ upstream_ms: Date.now() - started });
     const user = (data && data.user) || data;
-    return !!user && user.team_id === env.FIRM_TEAM_ID;
+    return !!user && user.team_id === env.FIRM_TEAM_ID ? "firm" : "not_firm";
   } catch (_) {
-    return false;
+    note({ upstream_ms: Date.now() - started });
+    return stage;
   }
 }
 
@@ -162,9 +179,12 @@ export default {
     // ---- Serve a stored image (random 32-hex public key) ----
     const serveMatch = url.pathname.match(/^\/img\/([0-9a-f]{32})$/);
     if (request.method === "GET" && serveMatch) {
+      // No row is started here: a fetch that finds its image must leave no trace.
+      const call = beginCall(env, ctx, "images", request, url.pathname, { start: false });
       const found = await env.IMG.getWithMetadata(`i:${serveMatch[1]}`, "arrayBuffer");
       if (!found || !found.value) {
-        logCall(env, ctx, { method: "GET", endpoint: "/img/<key>", status: 404, ms: 0, detail: "not_found" });
+        call.set({ status: 404, reply_reason: "not_found", failure_category: CATEGORY.not_found });
+        call.end();
         return json({ error: "not_found" }, 404, origin);
       }
       const ct = (found.metadata && found.metadata.ct) || "image/png";
@@ -183,13 +203,15 @@ export default {
     // ---- Upload ----
     if (request.method === "POST" && url.pathname === "/img") {
       // Every upload outcome leaves one call-log row.
-      const started = Date.now();
-      const done = (res, detail) => {
-        logCall(env, ctx, { method: "POST", endpoint: "/img", status: res.status, ms: Date.now() - started, detail });
+      const call = beginCall(env, ctx, "images", request, url.pathname);
+      const done = (res, code, more) => {
+        call.set({ status: res.status, ...(code ? { reply_reason: code, failure_category: CATEGORY[code] } : {}), ...more });
+        call.end();
         return res;
       };
       try {
         const ct = (request.headers.get("Content-Type") || "").split(";")[0].trim().toLowerCase();
+        call.set({ content_type: ct });
         if (!MAGIC[ct]) {
           return done(json({ error: "unsupported_content_type", contentType: ct }, 415, origin), "unsupported_content_type");
         }
@@ -200,9 +222,18 @@ export default {
           return done(json({ error: "too_large", maxBytes: MAX_BYTES }, 413, origin), "too_large");
         }
 
-        if (!(await apolloKeyIsFirm(request.headers.get("X-Api-Key"), env))) {
-          return done(json({ error: "invalid_api_key" }, 401, origin), "invalid_api_key");
+        const gate = {};
+        const keyCheck = await apolloKeyCheck(request.headers.get("X-Api-Key"), env, (f) => {
+          Object.assign(gate, f);
+          call.set(f);
+        });
+        if (keyCheck !== "firm") {
+          return done(json({ error: "invalid_api_key" }, 401, origin), "invalid_api_key", {
+            key_check: keyCheck,
+            failure_category: keyCheck === "rejected" ? rejectedCategory(gate.upstream_status) : KEY_CATEGORY[keyCheck],
+          });
         }
+        call.set({ key_check: keyCheck });
 
         // Daily quota — fail closed.
         const quotaKey = `q:${new Date().toISOString().slice(0, 10)}`;
@@ -212,6 +243,7 @@ export default {
         }
 
         const body = await request.arrayBuffer();
+        call.set({ upload_bytes: body.byteLength });
         if (body.byteLength === 0) return done(json({ error: "empty_body" }, 400, origin), "empty_body");
         if (body.byteLength > MAX_BYTES) {
           return done(json({ error: "too_large", maxBytes: MAX_BYTES }, 413, origin), "too_large");
@@ -236,14 +268,20 @@ export default {
 
         return done(
           json({ url: `${url.origin}/img/${key}`, deduped: !!existingKey }, 200, origin),
-          `${ct} ${body.byteLength} bytes${existingKey ? ", deduped" : ""}`
+          null,
+          { deduped: !!existingKey }
         );
       } catch (err) {
-        done(new Response(null, { status: 500 }), `exception: ${String(err).slice(0, 120)}`);
+        call.set({ status: 500, reply_reason: "thrown", failure_category: "internal" });
+        call.end({ thrown: true });
         throw err;
       }
     }
 
+    // Any other request: one complete row, written only because it failed.
+    const miss = beginCall(env, ctx, "images", request, url.pathname, { start: false });
+    miss.set({ status: 404, reply_reason: "not_found", failure_category: CATEGORY.not_found });
+    miss.end();
     return json({ error: "not_found" }, 404, origin);
   },
 };

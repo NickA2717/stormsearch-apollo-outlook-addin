@@ -7,13 +7,22 @@ compatibility_date = "2026-04-25"
 # Public URL: https://stormsearch-apollo-proxy.jyurk.workers.dev
 account_id = "44352d119e27f338ca2eda18ef410e7c"
 
-# Call log: one row per proxied Apollo call (src/index.js), shared with worker-images. Schema in
+# Usage log: one row per proxied Apollo call (src/index.js, src/usage-log.js), shared with worker-images. Schema in
 # migrations/; apply with ./node_modules/.bin/wrangler d1 migrations apply apollo-addin-calls --remote
 [[d1_databases]]
 binding = "CALL_LOG"
 database_name = "apollo-addin-calls"
 database_id = "5ceea248-cf11-4a52-bf37-3dfd7dded62b"
 migrations_dir = "migrations"
+
+# Usage log (2026-11-08): the Worker version on every row, and one Analytics Engine point per log
+# write so lost writes show without D1 (docs/RUNBOOK_USAGE_LOG.md). Both Workers share the dataset.
+[version_metadata]
+binding = "CF_VERSION_METADATA"
+
+[[analytics_engine_datasets]]
+binding = "USAGE_HEALTH"
+dataset = "apollo_addin_usage_health"
 
 # Workers Logs stays off: it records request headers, and every call carries an Apollo key.
 [observability]

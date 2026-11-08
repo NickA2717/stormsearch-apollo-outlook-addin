@@ -19,32 +19,18 @@
  *   - Origin allowlist below restricts who can use the proxy. Add new
  *     Outlook iframe hosts as Microsoft introduces them.
  *
- * Call log (2026-10-23): one D1 row per proxied call, so what the add-in did is
- * on record: the method, the Apollo path, Apollo's status and the time taken.
- * Never the key, a body or a query string. Workers Logs stays off
- * (wrangler.toml) because it records request headers, and every call here
- * carries the user's key.
+ * Usage log (2026-11-08, after the 2026-10-23 call log): one D1 row per proxied
+ * call, written by ./usage-log.js: the method, the Apollo path as a shape, the
+ * outcome, Apollo's status, total and Apollo time, the caller class (from the
+ * Origin header), whether a key was sent, and the Worker version. Never the
+ * key, a body, a query string or error text. Logging never delays, fails or
+ * changes a reply. Workers Logs stays off (wrangler.toml) because it records
+ * request headers, and every call here carries the user's key.
  */
 
-const APOLLO_ORIGIN = "https://api.apollo.io";
-const LOG_RETAIN_DAYS = 90;
+import { beginCall } from "./usage-log.js";
 
-// Best effort: a failed write never affects the call. Prunes rows past the
-// retention window on about one write in a hundred.
-function logCall(env, ctx, row) {
-  if (!env.CALL_LOG) return;
-  const now = Date.now();
-  const stmts = [
-    env.CALL_LOG.prepare(
-      "INSERT INTO calls (ts, worker, method, endpoint, status, ms, detail) VALUES (?, ?, ?, ?, ?, ?, ?)"
-    ).bind(new Date(now).toISOString(), "proxy", row.method, row.endpoint.slice(0, 200), row.status, row.ms, row.detail || null),
-  ];
-  if (Math.random() < 0.01) {
-    const cutoff = new Date(now - LOG_RETAIN_DAYS * 86400000).toISOString();
-    stmts.push(env.CALL_LOG.prepare("DELETE FROM calls WHERE ts < ?").bind(cutoff));
-  }
-  ctx.waitUntil(env.CALL_LOG.batch(stmts).catch(() => {}));
-}
+const APOLLO_ORIGIN = "https://api.apollo.io";
 
 // Origins that may invoke this proxy. Office Add-ins iframe under various
 // Microsoft hosts; allow them all plus our own GitHub Pages.
@@ -99,6 +85,17 @@ export default {
       );
     }
 
+    const call = beginCall(env, ctx, "proxy", request, url.pathname);
+    try {
+      return await proxy(request, url, origin, call);
+    } catch (err) {
+      call.end({ thrown: true });
+      throw err;
+    }
+  },
+};
+
+async function proxy(request, url, origin, call) {
     // Build the upstream Apollo URL: forward whatever path & query the caller used.
     const apolloUrl = APOLLO_ORIGIN + url.pathname + url.search;
 
@@ -122,20 +119,17 @@ export default {
     try {
       upstreamRes = await fetch(apolloUrl, init);
     } catch (err) {
-      // The URL is cut from the reason: its query can carry search terms.
-      const reason = String(err).replace(/https?:\/\/[^\n]*/g, "<url>").slice(0, 120);
-      logCall(env, ctx, {
-        method: request.method, endpoint: url.pathname, status: 502,
-        ms: Date.now() - started, detail: `upstream_fetch_failed: ${reason}`,
+      call.set({
+        status: 502, upstream_ms: Date.now() - started,
+        failure_category: "upstream_error", reply_reason: "upstream_fetch_failed",
       });
+      call.end();
       return new Response(
         JSON.stringify({ error: "upstream_fetch_failed", message: String(err) }),
         { status: 502, headers: { "Content-Type": "application/json", ...corsHeaders(origin) } }
       );
     }
-    logCall(env, ctx, {
-      method: request.method, endpoint: url.pathname, status: upstreamRes.status, ms: Date.now() - started,
-    });
+    call.set({ status: upstreamRes.status, upstream_ms: Date.now() - started });
 
     // Echo Apollo's response back, but strip cookies/redirects/CSP that don't apply
     // to the proxy's caller, and add our CORS headers.
@@ -154,10 +148,11 @@ export default {
     });
     Object.entries(corsHeaders(origin)).forEach(([k, v]) => respHeaders.set(k, v));
 
-    return new Response(upstreamRes.body, {
+    const response = new Response(upstreamRes.body, {
       status: upstreamRes.status,
       statusText: upstreamRes.statusText,
       headers: respHeaders,
     });
-  },
-};
+    call.end();
+    return response;
+}
