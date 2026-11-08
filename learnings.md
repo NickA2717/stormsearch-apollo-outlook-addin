@@ -14,3 +14,7 @@ Facts about Apollo, Outlook and GitHub Pages that code cannot fix. Fixable lesso
 - Outlook Web's real compose body serializes links and signatures in ways a hand-written test fixture does not; test formatter changes against a recent real captured body.
 - The compose body must be read at click time, not when the pane loads, or the push uses stale text.
 - An HTTP success from Apollo does not prove the step was filled; check the artifact in Apollo.
+- Apollo's `GET /v1/auth/health` answers 200 with or without a key (a keyless call just reports not logged in), so it proves Apollo is up, never that a key works; the image host checks keys with `/v1/users/api_profile` instead (2026-11-08).
+- Apollo answers a keyless `GET /v1/email_accounts` with 422, not 401 (2026-11-08), so a missing key does not always look like an authentication failure.
+- A Cloudflare Analytics Engine dataset that has never been written answers its SQL API with 200 and no rows, and new points take a minute or more to show; only a non-OK answer is a failed query (2026-11-08).
+- D1 `ALTER TABLE ... ADD COLUMN` (nullable, no default) leaves a running Worker's older `INSERT` working, so a column can be added before the code that writes it is deployed (2026-11-08).
