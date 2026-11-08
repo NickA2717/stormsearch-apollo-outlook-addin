@@ -103,7 +103,7 @@ const RECORD_ID = /^(?:[0-9a-f]{24}|[0-9a-f]{32})$/;
 const MAX_SEGMENTS = 8;
 
 // The add-in's own GitHub Pages origin (the task pane runs there) and the Microsoft hosts both
-// Workers already allow (their ALLOWED_ORIGIN_PATTERNS).
+// Workers already allow (their ALLOWED_ORIGIN_PATTERNS); change all three lists together.
 const ADDIN_ORIGIN = "https://nicka2717.github.io";
 const OFFICE_ORIGINS = [
   /^https:\/\/outlook\.office\.com$/,

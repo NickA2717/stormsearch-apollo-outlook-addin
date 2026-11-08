@@ -43,3 +43,5 @@ What the add-in's usage log records, how to read it, what has been settled and w
 - `Origin` can be forged by anything that is not a browser, so `outlook-addin` means "claimed to be the add-in". Every call still needs a working Apollo key, which is what actually gates use.
 - A client that disconnects mid-call leaves its row `started`; the report shows it as interrupted after 15 minutes. The log does not tell a disconnect from a Worker that was stopped.
 - A hanging image fetch leaves no row, by design (no `started` row for image fetches).
+- As of 2026-11-08 no real push from Outlook had passed through the new versions: every `outlook-addin` row so far came from the capture script sending the add-in's Origin. That real task-pane calls arrive as `outlook-addin` follows from where the task pane is served; the first real push confirms it.
+- `usage-log.js` keeps its own copy of the Microsoft origins both Workers allow (for `office-host`). A host added to a Worker's allowlist and not there would log as `other-origin`; change both together.
