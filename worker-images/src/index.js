@@ -181,7 +181,15 @@ export default {
     if (request.method === "GET" && serveMatch) {
       // No row is started here: a fetch that finds its image must leave no trace.
       const call = beginCall(env, ctx, "images", request, url.pathname, { start: false });
-      const found = await env.IMG.getWithMetadata(`i:${serveMatch[1]}`, "arrayBuffer");
+      let found;
+      try {
+        found = await env.IMG.getWithMetadata(`i:${serveMatch[1]}`, "arrayBuffer");
+      } catch (err) {
+        // A KV failure is a failed image request too (2026-11-08 review): log it, then rethrow unchanged.
+        call.set({ status: 500, reply_reason: "thrown", failure_category: "internal" });
+        call.end({ thrown: true });
+        throw err;
+      }
       if (!found || !found.value) {
         call.set({ status: 404, reply_reason: "not_found", failure_category: CATEGORY.not_found });
         call.end();

@@ -129,7 +129,9 @@ async function proxy(request, url, origin, call) {
         { status: 502, headers: { "Content-Type": "application/json", ...corsHeaders(origin) } }
       );
     }
-    call.set({ status: upstreamRes.status, upstream_ms: Date.now() - started });
+    // The proxy answers with Apollo's own status, so it is both `status` and `upstream_status`, the
+    // column the images Worker also uses for Apollo's status (2026-11-08 review).
+    call.set({ status: upstreamRes.status, upstream_status: upstreamRes.status, upstream_ms: Date.now() - started });
 
     // Echo Apollo's response back, but strip cookies/redirects/CSP that don't apply
     // to the proxy's caller, and add our CORS headers.

@@ -133,6 +133,9 @@ test('one complete row per proxied call, none for preflight or health', async ()
 		rows.map((r) => [r.method, r.endpoint, r.outcome, r.caller, r.has_key, r.status, r.failure_category, r.reply_reason]),
 		want,
 	);
+	// Apollo's status is in upstream_status too, like the images Worker's rows; a call Apollo never answered has none.
+	const upstream = db.prepare('SELECT status, upstream_status FROM calls ORDER BY id').all();
+	for (const u of upstream) assert.equal(u.upstream_status, u.status === 502 ? null : u.status);
 	for (const r of rows) {
 		assert.equal(r.worker, 'proxy');
 		assert.equal(r.version, VERSION);

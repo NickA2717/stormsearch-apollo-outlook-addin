@@ -177,6 +177,18 @@ test('a served image leaves no row and no health point, even when the fetch is t
 	assert.equal(ae.points.length, 0);
 });
 
+test('a KV failure while serving an image is rethrown unchanged and leaves one internal error row', async () => {
+	const db = sqlite();
+	const ctx = context();
+	const boom = new Error('KV down for someone@example.com');
+	const env = { ...on(db), IMG: { ...seededKv(), getWithMetadata: () => Promise.reject(boom) } };
+	await assert.rejects(worker.fetch(new Request(BASE + `/img/${STORED}`, { headers: { Origin: ADDIN } }), env, ctx), (e) => e === boom);
+	await ctx.settle();
+	const rows = db.prepare('SELECT outcome, status, failure_category, reply_reason, endpoint FROM calls').all();
+	assert.deepEqual(rows.map((r) => ({ ...r })), [{ outcome: 'error', status: 500, failure_category: 'internal', reply_reason: 'thrown', endpoint: '/img/{id}' }]);
+	assert.ok(!allValues(db).includes('someone@example.com'));
+});
+
 test('a thrown upload is rethrown unchanged and leaves an internal error row', async () => {
 	const db = sqlite();
 	const ctx = context();
